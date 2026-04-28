@@ -670,8 +670,9 @@ const App = () => {
   const fileInputRef = useRef(null);
 
   const categories = useMemo(() => {
+    const EXCLUDED = new Set(['기타', '패키지', '미분류']);
     const set = new Set();
-    for (const g of groups) if (g.category) set.add(g.category);
+    for (const g of groups) if (g.category && !EXCLUDED.has(g.category)) set.add(g.category);
     return Array.from(set).sort();
   }, [groups]);
 
