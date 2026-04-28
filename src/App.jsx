@@ -23,6 +23,29 @@ const isPackage = (productName) => /PACK/i.test(productName || '');
 const resolveCategory = (productName, rawCategory) =>
   isPackage(productName) ? '패키지' : (rawCategory || '미분류');
 
+const PRODUCT_CODE_RE = /[A-Z]{4}\d{4}/;
+const extractProductCode = (productName) => {
+  const m = String(productName || '').match(PRODUCT_CODE_RE);
+  return m ? m[0] : null;
+};
+
+const enrichPackageSeasons = (groups) => {
+  const codeToSeason = new Map();
+  for (const g of groups) {
+    if (g.season && !isPackage(g.productName)) {
+      const code = extractProductCode(g.productName);
+      if (code && !codeToSeason.has(code)) codeToSeason.set(code, g.season);
+    }
+  }
+  for (const g of groups) {
+    if (!g.season && isPackage(g.productName)) {
+      const code = extractProductCode(g.productName);
+      if (code && codeToSeason.has(code)) g.season = codeToSeason.get(code);
+    }
+  }
+  return groups;
+};
+
 const BRAND_CODES = ['FP', 'JM', 'WV', 'PS', 'EZ', 'TWN', 'PL', 'DY'];
 
 const extractBrand = (productName) => {
@@ -216,7 +239,7 @@ const parseProductCsv = (text) => {
       avgDaily,
     });
   }
-  return groups;
+  return enrichPackageSeasons(groups);
 };
 
 const groupByProduct = (skus) => {
@@ -265,7 +288,7 @@ const groupByProduct = (skus) => {
     const numDays = g.skus[0]?.sales.length || 1;
     g.avgDaily = g.totalSales / numDays;
   }
-  return Array.from(map.values());
+  return enrichPackageSeasons(Array.from(map.values()));
 };
 
 const monthsBetween = (dateStr, now = new Date()) => {
@@ -483,7 +506,7 @@ const buildItemsSheet = async (wb, sheetName, items, theme, embedImages, onImage
     { header: '2위 판매량', key: 'bestSku2Sales', width: 12 },
     { header: '현재 재고', key: 'currentStock', width: 12 },
     { header: '매출액', key: 'revenue', width: 14 },
-    { header: isRecommend ? '선정 사유' : '점수', key: 'score', width: isRecommend ? 18 : 10 },
+    ...(isRecommend ? [{ header: '선정 사유', key: 'score', width: 18 }] : []),
   ];
   ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
@@ -492,7 +515,7 @@ const buildItemsSheet = async (wb, sheetName, items, theme, embedImages, onImage
 
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const row = ws.addRow({
+    const rowData = {
       rank: i + 1,
       image: '',
       productName: it.productName,
@@ -505,8 +528,9 @@ const buildItemsSheet = async (wb, sheetName, items, theme, embedImages, onImage
       bestSku2Sales: it.bestSku2?.salesTotal || 0,
       currentStock: it.totalCurrentStock,
       revenue: it.totalRevenue,
-      score: isRecommend ? reasonLabel(it.pickReason) : Math.round(it.score * 100) / 100,
-    });
+    };
+    if (isRecommend) rowData.score = reasonLabel(it.pickReason);
+    const row = ws.addRow(rowData);
     row.height = 80;
     row.alignment = { vertical: 'middle', wrapText: true };
     row.getCell('revenue').numFmt = '#,##0';
@@ -1328,7 +1352,9 @@ const Preview = ({ items, theme, dateLabels }) => {
               <th className="px-3 py-2 text-right font-medium whitespace-nowrap">2위 판매</th>
               <th className="px-3 py-2 text-right font-medium whitespace-nowrap">현재 재고</th>
               <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매출액</th>
-              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">{theme === 'recommend' ? '선정 사유' : '점수'}</th>
+              {theme === 'recommend' && (
+                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">선정 사유</th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -1357,14 +1383,12 @@ const Preview = ({ items, theme, dateLabels }) => {
                 <td className="px-3 py-2 text-right whitespace-nowrap">{it.bestSku2?.salesTotal || 0}</td>
                 <td className="px-3 py-2 text-right text-slate-600 whitespace-nowrap">{it.totalCurrentStock.toLocaleString()}</td>
                 <td className="px-3 py-2 text-right text-slate-600 whitespace-nowrap">{it.totalRevenue.toLocaleString()}</td>
-                {theme === 'recommend' ? (
+                {theme === 'recommend' && (
                   <td className="px-3 py-2 text-xs whitespace-nowrap">
                     <span className="inline-flex px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">
                       {reasonLabel(it.pickReason)}
                     </span>
                   </td>
-                ) : (
-                  <td className="px-3 py-2 text-right text-slate-500 text-xs whitespace-nowrap">{Math.round(it.score * 100) / 100}</td>
                 )}
               </tr>
             ))}
