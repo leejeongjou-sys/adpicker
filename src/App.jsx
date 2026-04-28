@@ -361,7 +361,7 @@ const filterByTheme = (theme, opts, groups) => {
   if (opts.seasonFilters?.length > 0) {
     list = list.filter(g => opts.seasonFilters.includes(g.season));
   }
-  if (opts.minCurrentStock > 0) {
+  if (opts.minCurrentStock > 0 && theme !== 'package') {
     list = list.filter(g => g.totalCurrentStock >= opts.minCurrentStock);
   }
   return list;
@@ -1068,7 +1068,7 @@ const App = () => {
               </Panel>
 
               <Panel title="주제별 옵션">
-                {theme !== 'custom' && (
+                {theme !== 'custom' && theme !== 'package' && (
                   <div className="mb-3 pb-3 border-b border-cream-300 flex items-center gap-2">
                     <label className="text-xs text-stone-600 whitespace-nowrap">현재 재고</label>
                     <input
