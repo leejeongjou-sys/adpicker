@@ -866,7 +866,7 @@ const App = () => {
           <div className="grid grid-cols-12 gap-6">
             <aside className="col-span-12 lg:col-span-4 xl:col-span-3 space-y-4">
               <Panel title={`주제 선택 ${mode ? `· ${mode.toUpperCase()} 모드` : ''}`} icon={ThemeIcon}>
-                <div className="grid grid-cols-1 gap-1.5">
+                <div className="grid grid-cols-2 gap-2">
                   {visibleThemes.map(t => {
                     const Icon = t.icon;
                     const active = theme === t.id;
@@ -874,18 +874,16 @@ const App = () => {
                       <button
                         key={t.id}
                         onClick={() => setTheme(t.id)}
-                        className={`flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-left transition border ${
+                        className={`flex flex-col items-center justify-start gap-1.5 p-3 rounded-lg text-center transition border min-h-[100px] ${
                           active
-                            ? 'bg-slate-900 text-white border-slate-900'
-                            : 'bg-white border-slate-200 hover:border-slate-300'
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                            : 'bg-white border-slate-200 hover:border-slate-400 hover:shadow-sm'
                         }`}
                       >
-                        <Icon size={16} className={`mt-0.5 shrink-0 ${active ? 'text-amber-300' : 'text-slate-500'}`} />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium">{t.label}</div>
-                          <div className={`text-xs mt-0.5 ${active ? 'text-slate-300' : 'text-slate-500'}`}>
-                            {t.desc}
-                          </div>
+                        <Icon size={22} className={active ? 'text-amber-300' : 'text-slate-500'} />
+                        <div className="text-sm font-medium leading-tight">{t.label}</div>
+                        <div className={`text-[11px] leading-snug ${active ? 'text-slate-300' : 'text-slate-500'}`}>
+                          {t.desc}
                         </div>
                       </button>
                     );
@@ -1359,19 +1357,21 @@ const Preview = ({ items, theme, dateLabels }) => {
           </thead>
           <tbody>
             {items.map((it, i) => (
-              <tr key={it.productName} className="border-t border-slate-100 hover:bg-slate-50">
+              <tr key={it.productName} className="border-t border-slate-100 hover:bg-slate-50 h-[68px]">
                 <td className="px-3 py-2 font-medium text-slate-500 whitespace-nowrap">{i + 1}</td>
                 <td className="px-3 py-2 whitespace-nowrap">
-                  {it.imageUrl && it.imageUrl !== '이미지없음' ? (
-                    <img
-                      src={it.imageUrl}
-                      alt=""
-                      className="w-12 h-12 object-cover rounded border border-slate-200"
-                      onError={(e) => { e.target.style.display = 'none'; }}
-                    />
-                  ) : (
-                    <div className="w-12 h-12 bg-slate-100 rounded text-xs text-slate-400 flex items-center justify-center">없음</div>
-                  )}
+                  <div className="w-12 h-12 bg-slate-100 rounded border border-slate-200 overflow-hidden flex items-center justify-center">
+                    {it.imageUrl && it.imageUrl !== '이미지없음' ? (
+                      <img
+                        src={it.imageUrl}
+                        alt=""
+                        className="w-full h-full object-cover"
+                        onError={(e) => { e.target.style.display = 'none'; }}
+                      />
+                    ) : (
+                      <span className="text-xs text-slate-400">없음</span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-3 py-2 font-medium whitespace-nowrap">{it.productName}</td>
                 <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{it.category}</td>
