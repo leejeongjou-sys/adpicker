@@ -361,6 +361,9 @@ const filterByTheme = (theme, opts, groups) => {
   if (opts.seasonFilters?.length > 0) {
     list = list.filter(g => opts.seasonFilters.includes(g.season));
   }
+  if (opts.minCurrentStock > 0) {
+    list = list.filter(g => g.totalCurrentStock >= opts.minCurrentStock);
+  }
   return list;
 };
 
@@ -395,9 +398,12 @@ const RECOMMEND_PLAN = [
 ];
 
 const pickRecommendation = (groups, opts) => {
-  const seasonFiltered = opts.seasonFilters?.length > 0
+  let seasonFiltered = opts.seasonFilters?.length > 0
     ? groups.filter(g => opts.seasonFilters.includes(g.season))
     : groups;
+  if (opts.minCurrentStock > 0) {
+    seasonFiltered = seasonFiltered.filter(g => g.totalCurrentStock >= opts.minCurrentStock);
+  }
 
   const picks = [];
   const used = new Set();
@@ -717,6 +723,7 @@ const exportSingleTheme = async (items, theme, opts, embedImages, onProgress) =>
     info.push(['스테디셀러 일평균 임계', `${opts.minAvgDaily} 개/일`]);
   }
   if (opts.seasonFilters?.length > 0) info.push(['시즌 필터', opts.seasonFilters.join(', ')]);
+  if (opts.minCurrentStock > 0) info.push(['재고 임계', `${opts.minCurrentStock}개 미만 제외`]);
   if (opts.useDiversity) info.push(['카테고리 다양성', `한 카테고리 최대 ${opts.maxPerCategory}개`]);
   buildMetaSheet(wb, info);
 
@@ -769,6 +776,7 @@ const exportAllThemes = async (groups, mode, opts, embedImages, brands, categori
     ['시트 수', sheetPlans.length],
   ];
   if (opts.seasonFilters?.length > 0) info.push(['시즌 필터', opts.seasonFilters.join(', ')]);
+  if (opts.minCurrentStock > 0) info.push(['재고 임계', `${opts.minCurrentStock}개 미만 제외`]);
   if (opts.useDiversity) info.push(['카테고리 다양성', `한 카테고리 최대 ${opts.maxPerCategory}개`]);
   buildMetaSheet(wb, info);
 
@@ -795,6 +803,7 @@ const App = () => {
     minEarly: 3,
     minStock: 30,
     maxSales: 5,
+    minCurrentStock: 5,
     seasonFilters: [],
     useDiversity: true,
     maxPerCategory: 3,
@@ -1059,6 +1068,19 @@ const App = () => {
               </Panel>
 
               <Panel title="주제별 옵션">
+                {theme !== 'custom' && (
+                  <div className="mb-3 pb-3 border-b border-cream-300 flex items-center gap-2">
+                    <label className="text-xs text-stone-600 whitespace-nowrap">현재 재고</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={opts.minCurrentStock}
+                      onChange={e => setOpts({ ...opts, minCurrentStock: parseInt(e.target.value) || 0 })}
+                      className="w-16 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
+                    />
+                    <span className="text-xs text-stone-500">개 미만 제외</span>
+                  </div>
+                )}
                 <ThemeOptions
                   theme={theme}
                   opts={opts}
