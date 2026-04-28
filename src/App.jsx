@@ -2,7 +2,8 @@ import React, { useState, useMemo, useCallback, useRef } from 'react';
 import {
   LucideUpload, LucideFileSpreadsheet, LucideDownload, LucideSparkles,
   LucideTrendingUp, LucideTrendingDown, LucideStar, LucideCalendar, LucideShirt, LucideTag,
-  LucidePackage, LucideAlertCircle, LucideX, LucideImage, LucideBox, LucideArchive, LucideAward
+  LucidePackage, LucideAlertCircle, LucideX, LucideImage, LucideBox, LucideArchive, LucideAward,
+  LucideMessageSquare, LucideKey, LucideLoader2
 } from 'lucide-react';
 import ExcelJS from 'exceljs';
 
@@ -17,6 +18,7 @@ const THEMES = [
   { id: 'brand', label: '브랜드별 베스트', desc: '상품명 prefix 코드로 분류', icon: LucideTag, modes: ['xls', 'csv'] },
   { id: 'steady', label: '스테디셀러', desc: '오래됐지만 꾸준한 상품', icon: LucidePackage, modes: ['xls', 'csv'] },
   { id: 'overstock', label: '재고 과다', desc: '재고 많고 안 팔리는 상품 (재고 소진용)', icon: LucideArchive, modes: ['xls'] },
+  { id: 'custom', label: '직접 입력', desc: '자연어 조건으로 직접 추출', icon: LucideMessageSquare, modes: ['xls', 'csv'] },
 ];
 
 const isPackage = (productName) => /PACK/i.test(productName || '');
@@ -224,6 +226,7 @@ const parseProductCsv = (text) => {
       season: extractSeason(purchaseName),
       memo1: get(colMap.memo1),
       brand: extractBrand(productName),
+      isPackage: isPackage(productName),
       registDate: get(colMap.registDate),
       price: parsePrice(get(colMap.price)),
       imageUrl: null,
@@ -254,6 +257,7 @@ const groupByProduct = (skus) => {
         season: s.season,
         memo1: s.memo1,
         brand: extractBrand(s.productName),
+        isPackage: isPackage(s.productName),
         registDate: s.registDate,
         price: s.price,
         imageUrl: null,
@@ -445,8 +449,110 @@ const pickRecommendation = (groups, opts) => {
   return picks.slice(0, 8);
 };
 
+const buildCustomPrompt = (userQuery, mode) => `당신은 광고 후보 상품 선정을 돕는 데이터 어시스턴트입니다.
+
+상품(group) 데이터의 필드:
+- productName (string): 상품명
+- category (string): 카테고리 (예: 반바지, 티셔츠, 패키지 등)
+- season (string): 시즌 ("S/S" | "F/W" | "사계절" | "")
+- brand (string): 브랜드 코드 (FP/JM/WV/PS/EZ/TWN/PL/DY)
+- registDate (string): 등록일자, "YYYY-MM-DD"
+- isPackage (boolean): 패키지 상품 여부
+- totalSales (number): ${mode === 'csv' ? '누적' : '7일'} 판매수량
+- totalRevenue (number): 매출액(원)
+- totalCurrentStock (number): 현재 재고
+- avgDaily (number): 일평균 판매량
+- earlySales (number, xls만): 전반 4일 판매
+- lateSales (number, xls만): 후반 4일 판매
+
+사용자 자연어 조건:
+"""
+${userQuery}
+"""
+
+위 조건을 만족하는 상품을 뽑아내기 위한 JSON 명세를 출력하세요.
+출력 스키마(반드시 JSON만, 코드블록·주석 없이):
+{
+  "filters": [ { "field": "필드명", "op": "==/!=/>/>=/</<=/contains/in/notIn", "value": <값 또는 배열> }, ... ],
+  "sortBy": "필드명 (생략 가능)",
+  "order": "asc" | "desc",
+  "limit": <숫자, 기본 8>,
+  "summary": "한 줄로 어떤 기준인지 요약 (한국어)"
+}
+
+규칙:
+- filters는 모두 AND 결합
+- 자연어에 "이상"/"≥"는 ">=", "초과"는 ">", "이하"는 "<=", "미만"은 "<"
+- 카테고리/브랜드/시즌처럼 여러 값 매칭 시 op는 "in"
+- 숫자 비교는 op ">=" "<=" 등 사용
+- "패키지 제외" → {"field":"isPackage","op":"==","value":false}
+- 사용자가 명시 안 했으면 sortBy="totalSales", order="desc"
+- limit 기본 8`;
+
+const callGemini = async (apiKey, prompt) => {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
+    }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Gemini ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Gemini 응답이 비어있습니다.');
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`Gemini 응답 파싱 실패: ${text.slice(0, 200)}`);
+  }
+};
+
+const matchFilter = (group, f) => {
+  const v = group[f.field];
+  switch (f.op) {
+    case '==': return v == f.value;
+    case '!=': return v != f.value;
+    case '>': return Number(v) > Number(f.value);
+    case '>=': return Number(v) >= Number(f.value);
+    case '<': return Number(v) < Number(f.value);
+    case '<=': return Number(v) <= Number(f.value);
+    case 'contains': return String(v ?? '').toLowerCase().includes(String(f.value).toLowerCase());
+    case 'in': return Array.isArray(f.value) && f.value.includes(v);
+    case 'notIn': return Array.isArray(f.value) && !f.value.includes(v);
+    default: return true;
+  }
+};
+
+const applyCustomSpec = (groups, spec) => {
+  let list = groups;
+  if (Array.isArray(spec.filters)) {
+    list = list.filter(g => spec.filters.every(f => matchFilter(g, f)));
+  }
+  if (spec.sortBy) {
+    const order = spec.order === 'asc' ? 1 : -1;
+    list = [...list].sort((a, b) => {
+      const av = a[spec.sortBy], bv = b[spec.sortBy];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (av < bv) return -1 * order;
+      if (av > bv) return 1 * order;
+      return 0;
+    });
+  }
+  const limit = Number(spec.limit) || 8;
+  return list.slice(0, limit);
+};
+
 const pickItems = (groups, theme, opts) => {
   if (theme === 'recommend') return pickRecommendation(groups, opts);
+  if (theme === 'custom') return opts._customResults || [];
 
   const filtered = filterByTheme(theme, opts, groups);
   const scored = filtered
@@ -697,6 +803,14 @@ const App = () => {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(null);
   const [showSelector, setShowSelector] = useState(false);
+  const [customQuery, setCustomQuery] = useState('');
+  const [apiKey, setApiKey] = useState(() =>
+    typeof window !== 'undefined' ? (localStorage.getItem('geminiApiKey') || '') : ''
+  );
+  const [customResults, setCustomResults] = useState([]);
+  const [customSpec, setCustomSpec] = useState(null);
+  const [customLoading, setCustomLoading] = useState(false);
+  const [customError, setCustomError] = useState(null);
   const fileInputRef = useRef(null);
 
   const categories = useMemo(() => {
@@ -753,8 +867,44 @@ const App = () => {
 
   const preview = useMemo(() => {
     if (groups.length === 0) return [];
-    return pickItems(groups, theme, opts);
-  }, [groups, theme, opts]);
+    return pickItems(groups, theme, { ...opts, _customResults: customResults });
+  }, [groups, theme, opts, customResults]);
+
+  const saveApiKey = useCallback((k) => {
+    setApiKey(k);
+    if (typeof window !== 'undefined') {
+      if (k) localStorage.setItem('geminiApiKey', k);
+      else localStorage.removeItem('geminiApiKey');
+    }
+  }, []);
+
+  const handleRunCustom = useCallback(async () => {
+    if (!customQuery.trim()) {
+      setCustomError('조건을 입력해 주세요.');
+      return;
+    }
+    if (!apiKey.trim()) {
+      setCustomError('Gemini API 키를 먼저 입력해 주세요.');
+      return;
+    }
+    setCustomLoading(true);
+    setCustomError(null);
+    setCustomSpec(null);
+    try {
+      const spec = await callGemini(apiKey, buildCustomPrompt(customQuery, mode));
+      const items = applyCustomSpec(groups, spec);
+      setCustomSpec(spec);
+      setCustomResults(items);
+      if (items.length === 0) {
+        setCustomError('조건에 맞는 상품이 없어요. 조건을 완화해 보세요.');
+      }
+    } catch (e) {
+      setCustomError(e.message);
+      setCustomResults([]);
+    } finally {
+      setCustomLoading(false);
+    }
+  }, [apiKey, customQuery, groups, mode]);
 
   const handleExportSingle = useCallback(async () => {
     if (preview.length === 0) return;
@@ -915,6 +1065,15 @@ const App = () => {
                   setOpts={setOpts}
                   categories={categories}
                   brands={brands}
+                  customQuery={customQuery}
+                  setCustomQuery={setCustomQuery}
+                  apiKey={apiKey}
+                  saveApiKey={saveApiKey}
+                  customLoading={customLoading}
+                  customError={customError}
+                  customSpec={customSpec}
+                  customResultsCount={customResults.length}
+                  onRunCustom={handleRunCustom}
                 />
               </Panel>
 
@@ -1136,8 +1295,64 @@ const Panel = ({ title, icon: Icon, children }) => (
   </div>
 );
 
-const ThemeOptions = ({ theme, opts, setOpts, categories, brands }) => {
+const ThemeOptions = ({
+  theme, opts, setOpts, categories, brands,
+  customQuery, setCustomQuery, apiKey, saveApiKey,
+  customLoading, customError, customSpec, customResultsCount, onRunCustom,
+}) => {
   const set = (k, v) => setOpts({ ...opts, [k]: v });
+
+  if (theme === 'custom') {
+    return (
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs text-stone-600 block mb-1">조건 (자연어)</label>
+          <textarea
+            value={customQuery}
+            onChange={e => setCustomQuery(e.target.value)}
+            rows={4}
+            placeholder={'예: 반바지 카테고리 중 재고 50개 이상이고\n7일 판매량 5개 이상인 S/S 상품을\n매출액 높은 순으로'}
+            className="w-full px-2 py-2 text-sm border border-cream-400 bg-cream-50 focus:outline-none focus:border-stone-700 leading-snug resize-y"
+          />
+        </div>
+        <details>
+          <summary className="text-xs text-stone-600 cursor-pointer hover:text-stone-900 flex items-center gap-1">
+            <LucideKey size={11} /> Gemini API 키 {apiKey ? '(저장됨)' : '(필요)'}
+          </summary>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={e => saveApiKey(e.target.value)}
+            placeholder="AIzaSy..."
+            className="w-full mt-2 px-2 py-1.5 text-xs border border-cream-400 bg-cream-50 focus:outline-none focus:border-stone-700"
+          />
+          <p className="text-xs text-stone-500 mt-1 leading-snug">
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline">aistudio.google.com</a>에서 무료 발급. 브라우저에만 저장돼.
+          </p>
+        </details>
+        <button
+          onClick={onRunCustom}
+          disabled={customLoading || !customQuery.trim() || !apiKey.trim()}
+          className="w-full bg-stone-900 hover:bg-stone-800 disabled:bg-cream-300 disabled:text-stone-400 text-cream-50 py-2 text-sm font-medium flex items-center justify-center gap-2"
+        >
+          {customLoading ? (
+            <><LucideLoader2 size={14} className="animate-spin" /> 분석 중...</>
+          ) : (
+            <>조건으로 추출</>
+          )}
+        </button>
+        {customError && (
+          <p className="text-xs text-rose-700">{customError}</p>
+        )}
+        {customSpec && !customError && (
+          <div className="bg-cream-200 border border-cream-400 px-3 py-2 text-xs text-stone-700 leading-relaxed">
+            <div className="font-medium text-stone-900 mb-1">{customSpec.summary || '추출 완료'}</div>
+            <div>총 {customResultsCount}개 결과</div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (theme === 'category') {
     const selected = opts.categories || [];
