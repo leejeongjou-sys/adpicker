@@ -534,7 +534,8 @@ const buildItemsSheet = async (wb, sheetName, items, theme, embedImages, onImage
     if (isRecommend) rowData.score = reasonLabel(it.pickReason);
     const row = ws.addRow(rowData);
     row.height = 80;
-    row.alignment = { vertical: 'middle', wrapText: true };
+    row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    row.getCell('productName').alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
     row.getCell('revenue').numFmt = '#,##0';
     row.getCell('currentStock').numFmt = '#,##0';
   }
