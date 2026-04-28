@@ -590,8 +590,10 @@ const exportSingleTheme = async (items, theme, opts, embedImages, onProgress) =>
   await saveWorkbook(wb, `ADpicker_${themeLabel}`);
 };
 
-const exportAllThemes = async (groups, mode, opts, embedImages, brands, categories, onProgress) => {
-  const visibleThemes = THEMES.filter(t => t.modes.includes(mode));
+const exportAllThemes = async (groups, mode, opts, embedImages, brands, categories, selectedThemeIds, onProgress) => {
+  const visibleThemes = THEMES.filter(t =>
+    t.modes.includes(mode) && (!selectedThemeIds || selectedThemeIds.includes(t.id))
+  );
   const sheetPlans = [];
 
   for (const t of visibleThemes) {
@@ -667,6 +669,7 @@ const App = () => {
   const [embedImages, setEmbedImages] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(null);
+  const [showSelector, setShowSelector] = useState(false);
   const fileInputRef = useRef(null);
 
   const categories = useMemo(() => {
@@ -740,14 +743,15 @@ const App = () => {
     }
   }, [preview, theme, opts, embedImages]);
 
-  const handleExportAll = useCallback(async () => {
+  const handleExportSelected = useCallback(async (selectedIds) => {
     if (groups.length === 0 || !mode) return;
+    setShowSelector(false);
     setExporting('all');
     setExportProgress(null);
     try {
-      await exportAllThemes(groups, mode, opts, embedImages, brands, categories, (p) => setExportProgress(p));
+      await exportAllThemes(groups, mode, opts, embedImages, brands, categories, selectedIds, (p) => setExportProgress(p));
     } catch (e) {
-      setError(`전체 다운 실패: ${e.message}`);
+      setError(`다운 실패: ${e.message}`);
     } finally {
       setExporting(false);
       setExportProgress(null);
@@ -795,7 +799,7 @@ const App = () => {
                   : '현재 다운'}
               </button>
               <button
-                onClick={handleExportAll}
+                onClick={() => setShowSelector(true)}
                 disabled={exporting || groups.length === 0}
                 className="bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 text-sm transition"
               >
@@ -805,8 +809,8 @@ const App = () => {
                     ? `이미지 ${exportProgress.cur}/${exportProgress.total}...`
                     : exportProgress?.phase === 'sheet'
                       ? `시트 ${exportProgress.cur}/${exportProgress.total}...`
-                      : '전체 생성 중...'
-                  : '전체 다운'}
+                      : '생성 중...'
+                  : '선택 다운'}
               </button>
               <div className="text-xs text-slate-500 flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200">
                 <LucideFileSpreadsheet size={14} />
@@ -875,42 +879,6 @@ const App = () => {
                 />
               </Panel>
 
-              <Panel title="다운로드 옵션">
-                <div className="space-y-2.5 text-sm">
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={opts.useDiversity}
-                      onChange={e => setOpts({ ...opts, useDiversity: e.target.checked })}
-                    />
-                    카테고리 다양성 적용
-                  </label>
-                  {opts.useDiversity && (
-                    <div className="pl-6 flex items-center gap-1">
-                      <span className="text-xs text-slate-600">한 카테고리 최대</span>
-                      <input
-                        type="number"
-                        min="1"
-                        max="8"
-                        value={opts.maxPerCategory}
-                        onChange={e => setOpts({ ...opts, maxPerCategory: parseInt(e.target.value) || 3 })}
-                        className="w-14 px-2 py-1 text-sm border border-slate-200 rounded"
-                      />
-                      <span className="text-xs text-slate-500">개</span>
-                    </div>
-                  )}
-                  <label className="flex items-center gap-2 pt-1">
-                    <input
-                      type="checkbox"
-                      checked={embedImages}
-                      onChange={e => setEmbedImages(e.target.checked)}
-                    />
-                    <LucideImage size={14} className="text-slate-500" />
-                    이미지 셀 임베드
-                  </label>
-                </div>
-              </Panel>
-
               <button
                 onClick={() => {
                   setSkus([]);
@@ -929,6 +897,150 @@ const App = () => {
             </main>
           </div>
         )}
+      </div>
+      {showSelector && (
+        <ThemeSelectorModal
+          mode={mode}
+          categoriesCount={categories.length}
+          brandsCount={brands.length}
+          embedImages={embedImages}
+          setEmbedImages={setEmbedImages}
+          opts={opts}
+          setOpts={setOpts}
+          onCancel={() => setShowSelector(false)}
+          onConfirm={handleExportSelected}
+        />
+      )}
+    </div>
+  );
+};
+
+const ThemeSelectorModal = ({
+  mode, categoriesCount, brandsCount, embedImages, setEmbedImages, opts, setOpts, onCancel, onConfirm,
+}) => {
+  const visibleThemes = THEMES.filter(t => t.modes.includes(mode));
+  const [selected, setSelected] = useState(() => visibleThemes.map(t => t.id));
+
+  const toggle = (id) => {
+    setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  };
+
+  const sheetEstimate = (id) => {
+    if (id === 'category') return `시트 ${categoriesCount}개`;
+    if (id === 'brand') return `시트 ${brandsCount}개`;
+    return '시트 1개';
+  };
+
+  const totalSheets = selected.reduce((sum, id) => {
+    if (id === 'category') return sum + categoriesCount;
+    if (id === 'brand') return sum + brandsCount;
+    return sum + 1;
+  }, 0);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={onCancel}>
+      <div
+        className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h2 className="font-semibold">다운받을 주제 선택</h2>
+            <p className="text-xs text-slate-500 mt-0.5">{mode?.toUpperCase()} 모드 · 체크된 주제만 시트로 생성</p>
+          </div>
+          <button onClick={onCancel} className="text-slate-400 hover:text-slate-700">
+            <LucideX size={20} />
+          </button>
+        </div>
+
+        <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between text-xs">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelected(visibleThemes.map(t => t.id))}
+              className="text-slate-600 hover:text-slate-900 underline"
+            >전체 선택</button>
+            <span className="text-slate-300">·</span>
+            <button
+              onClick={() => setSelected([])}
+              className="text-slate-600 hover:text-slate-900 underline"
+            >해제</button>
+          </div>
+          <span className="text-slate-500">총 {totalSheets} 시트 생성 예정</span>
+        </div>
+
+        <div className="overflow-y-auto px-5 py-3 space-y-1.5">
+          {visibleThemes.map(t => {
+            const Icon = t.icon;
+            const checked = selected.includes(t.id);
+            return (
+              <label
+                key={t.id}
+                className={`flex items-start gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition ${
+                  checked ? 'bg-slate-50 border-slate-300' : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(t.id)}
+                  className="mt-1"
+                />
+                <Icon size={16} className="mt-0.5 text-slate-500 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-sm font-medium">{t.label}</span>
+                    <span className="text-xs text-slate-400 shrink-0">{sheetEstimate(t.id)}</span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">{t.desc}</p>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+
+        <div className="px-5 py-3 border-t border-slate-100 space-y-2 text-sm bg-slate-50">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={opts.useDiversity}
+              onChange={e => setOpts({ ...opts, useDiversity: e.target.checked })}
+            />
+            카테고리 다양성 (한 카테고리 최대
+            <input
+              type="number"
+              min="1"
+              max="8"
+              value={opts.maxPerCategory}
+              onChange={e => setOpts({ ...opts, maxPerCategory: parseInt(e.target.value) || 3 })}
+              className="w-12 px-2 py-0.5 text-sm border border-slate-200 rounded mx-1"
+            />
+            개)
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={embedImages}
+              onChange={e => setEmbedImages(e.target.checked)}
+            />
+            <LucideImage size={14} className="text-slate-500" />
+            이미지 셀에 임베드 (느려짐, 끄면 URL 링크만)
+          </label>
+        </div>
+
+        <div className="px-5 py-3 border-t border-slate-200 flex items-center justify-end gap-2 bg-white">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900"
+          >취소</button>
+          <button
+            onClick={() => onConfirm(selected)}
+            disabled={selected.length === 0}
+            className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white px-5 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <LucideDownload size={14} />
+            다운로드
+          </button>
+        </div>
       </div>
     </div>
   );
