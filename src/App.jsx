@@ -599,6 +599,46 @@ const detectImageExt = (url) => {
 
 const reasonLabel = (id) => THEMES.find(t => t.id === id)?.label || id || '-';
 
+const buildBriefing = (theme, opts, mode, picks) => {
+  const n = picks.length;
+  const seasonText = opts.seasonFilters?.length > 0
+    ? ` 시즌은 ${opts.seasonFilters.join('·')}만 대상으로 잡았습니다.`
+    : '';
+  const periodText = mode === 'csv' ? '전체 누적' : '지난 7일';
+
+  switch (theme) {
+    case 'bestseller':
+      return `${periodText} 동안 가장 많이 팔린 상위 ${n}개 상품입니다.${seasonText} 검증된 수요가 있어 광고 전환율이 가장 안정적이고, ROI를 최우선으로 생각하는 메인 캠페인에 투입하기 좋습니다. 새 메시지보다는 상품 자체의 강점을 부각하는 소재가 효과적입니다.`;
+    case 'rising':
+      return `후반 4일 판매량이 전반 4일 대비 빠르게 증가한 라이징 ${n}개입니다.${seasonText} 트렌드 모멘텀이 살아있는 시점이라 노출을 늘리면 추가 성장 여력이 큽니다. 신선한 영상·UGC 같은 모멘텀 친화적인 광고 소재와 함께 운영하세요.`;
+    case 'declining':
+      return `후반 4일에 판매가 떨어진 ${n}개 상품입니다.${seasonText} 원래 수요는 검증됐지만 모멘텀이 식은 상태로, 광고 노출과 할인·리뉴얼 메시지로 다시 살릴 만한 후보입니다. 광고를 안 돌리면 그대로 사라질 가능성이 높습니다.`;
+    case 'newProduct':
+      return `최근 ${opts.newMonths}개월 이내 등록되어 초기 판매가 좋은 신상품 ${n}개입니다.${seasonText} 시장 안착 단계라 인지도 확보가 우선이며, 브랜드/콘셉트를 또렷이 전달하는 소재가 효과적입니다. 초기 광고 투입 효율이 평균 대비 높습니다.`;
+    case 'category': {
+      const cats = (opts.categories || []).join('·') || '선택 카테고리';
+      return `${cats} 안에서 ${periodText} 판매량 상위 ${n}개입니다.${seasonText} 같은 카테고리라 콘셉트가 일관되어 광고 묶음(카탈로그·릴) 운용에 적합합니다. 한 카테고리에 집중하는 캠페인 셋업으로 효율이 높아집니다.`;
+    }
+    case 'brand':
+      return `${opts.brand} 라인 중 ${periodText} 판매량 상위 ${n}개입니다.${seasonText} 브랜드 톤이 통일되어 시리즈·컬렉션 광고나 브랜드 인지도 캠페인에 잘 어울립니다. 한 라인을 단일 광고 슬롯으로 묶어 운영하기 좋아요.`;
+    case 'package':
+      return `상품명에 PACK이 포함된 패키지 상품 중 판매 상위 ${n}개입니다.${seasonText} 객단가가 높아 매출 효율이 좋고, "묶음 할인"·"세트 구성" 같은 가성비 메시지와 잘 맞습니다. 신규 고객 객단가 끌어올리는 용도로도 효과적입니다.`;
+    case 'steady':
+      return `등록 ${opts.minMonths}개월 이상이면서 일평균 ${opts.minAvgDaily}개 이상 꾸준히 팔리는 스테디셀러 ${n}개입니다.${seasonText} 검증된 효자 상품이라 광고 안정성이 가장 높고, 시즌 비수기의 매출 백본으로 적합합니다. 대규모 예산을 안전하게 태울 수 있습니다.`;
+    case 'overstock':
+      return `재고 ${opts.minStock}개 이상이면서 7일 판매가 ${opts.maxSales}개 이하인 적체 상품 ${n}개입니다.${seasonText} 광고로 재고 소진을 노리거나 할인 프로모션 대상으로 활용하기 좋습니다. 시즌 마감 전에 처리해야 손실이 줄어듭니다.`;
+    case 'recommend': {
+      const counts = picks.reduce((m, p) => ({ ...m, [p.pickReason]: (m[p.pickReason] || 0) + 1 }), {});
+      const parts = Object.entries(counts).map(([k, v]) => `${reasonLabel(k)} ${v}`).join(' · ');
+      return `${parts}로 구성된 균형 포트폴리오 ${n}개입니다.${seasonText} 단일 의도가 아니라 메인 매출(베스트셀러)·트렌드(급상승)·신선도(신상품)·재활성(판매 감소)·재고 소진(재고 과다)을 동시에 챙기는 종합 캠페인용 픽입니다. 광고 슬롯을 분산해 운영하기에 가장 효율적입니다.`;
+    }
+    case 'custom':
+      return `사용자 정의 조건으로 추출한 ${n}개 상품입니다. 적용된 기준은 우측 사이드바의 "추출 완료" 박스에서 확인할 수 있습니다.`;
+    default:
+      return `${THEMES.find(t => t.id === theme)?.label || ''} 주제로 선정된 ${n}개 상품입니다.${seasonText}`;
+  }
+};
+
 const sanitizeSheetName = (name) => {
   let n = String(name).replace(/[\\\/\*\?\[\]:]/g, '_').trim();
   if (n.length > 31) n = n.slice(0, 31);
@@ -686,8 +726,15 @@ const buildItemsSheet = async (wb, sheetName, items, theme, embedImages, onImage
 
 const buildMetaSheet = (wb, info) => {
   const meta = wb.addWorksheet('실행정보');
-  meta.columns = [{ key: 'k', width: 18 }, { key: 'v', width: 50 }];
-  for (const [k, v] of info) meta.addRow({ k, v });
+  meta.columns = [{ key: 'k', width: 22 }, { key: 'v', width: 90 }];
+  for (const [k, v] of info) {
+    const row = meta.addRow({ k, v });
+    if (typeof v === 'string' && v.length > 60) {
+      row.alignment = { wrapText: true, vertical: 'top' };
+      row.height = Math.min(160, 20 + Math.ceil(v.length / 60) * 16);
+      row.getCell('k').alignment = { wrapText: true, vertical: 'top', horizontal: 'left' };
+    }
+  }
   return meta;
 };
 
@@ -726,6 +773,7 @@ const exportSingleTheme = async (items, theme, opts, embedImages, onProgress) =>
   if (opts.seasonFilters?.length > 0) info.push(['시즌 필터', opts.seasonFilters.join(', ')]);
   if (opts.minCurrentStock > 0) info.push(['재고 임계', `${opts.minCurrentStock}개 미만 제외`]);
   if (opts.useDiversity) info.push(['카테고리 다양성', `한 카테고리 최대 ${opts.maxPerCategory}개`]);
+  info.push(['선정 사유 브리핑', buildBriefing(theme, opts, opts._mode, items)]);
   buildMetaSheet(wb, info);
 
   await saveWorkbook(wb, `ADpicker_${themeLabel}`);
@@ -779,6 +827,9 @@ const exportAllThemes = async (groups, mode, opts, embedImages, brands, categori
   if (opts.seasonFilters?.length > 0) info.push(['시즌 필터', opts.seasonFilters.join(', ')]);
   if (opts.minCurrentStock > 0) info.push(['재고 임계', `${opts.minCurrentStock}개 미만 제외`]);
   if (opts.useDiversity) info.push(['카테고리 다양성', `한 카테고리 최대 ${opts.maxPerCategory}개`]);
+  for (const plan of sheetPlans) {
+    info.push([`📋 ${plan.name}`, buildBriefing(plan.theme, opts, mode, plan.items)]);
+  }
   buildMetaSheet(wb, info);
 
   await saveWorkbook(wb, `ADpicker_전체_${mode.toUpperCase()}`);
@@ -813,6 +864,7 @@ const App = () => {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(null);
   const [showSelector, setShowSelector] = useState(false);
+  const [excluded, setExcluded] = useState([]);
   const [customQuery, setCustomQuery] = useState('');
   const [apiKey, setApiKey] = useState(() =>
     typeof window !== 'undefined' ? (localStorage.getItem('geminiApiKey') || '') : ''
@@ -877,8 +929,19 @@ const App = () => {
 
   const preview = useMemo(() => {
     if (groups.length === 0) return [];
-    return pickItems(groups, theme, { ...opts, _customResults: customResults, _mode: mode });
-  }, [groups, theme, opts, customResults, mode]);
+    const exSet = new Set(excluded);
+    const filteredGroups = exSet.size > 0 ? groups.filter(g => !exSet.has(g.productName)) : groups;
+    const filteredCustom = exSet.size > 0 ? customResults.filter(g => !exSet.has(g.productName)) : customResults;
+    return pickItems(filteredGroups, theme, { ...opts, _customResults: filteredCustom, _mode: mode });
+  }, [groups, theme, opts, customResults, mode, excluded]);
+
+  const handleExclude = useCallback((name) => {
+    setExcluded(prev => prev.includes(name) ? prev : [...prev, name]);
+  }, []);
+
+  const handleResetExcluded = useCallback(() => {
+    setExcluded([]);
+  }, []);
 
   const saveApiKey = useCallback((k) => {
     setApiKey(k);
@@ -1114,7 +1177,16 @@ const App = () => {
             </aside>
 
             <main className="col-span-12 lg:col-span-8 xl:col-span-9">
-              <Preview items={preview} theme={theme} dateLabels={dateLabels} />
+              <Preview
+                items={preview}
+                theme={theme}
+                dateLabels={dateLabels}
+                mode={mode}
+                opts={opts}
+                excludedCount={excluded.length}
+                onExclude={handleExclude}
+                onResetExcluded={handleResetExcluded}
+              />
             </main>
           </div>
         )}
@@ -1567,7 +1639,7 @@ const ThemeOptions = ({
   return <p className="text-xs text-stone-500">이 주제는 별도 옵션이 없어요.</p>;
 };
 
-const Preview = ({ items, theme, dateLabels }) => {
+const Preview = ({ items, theme, dateLabels, mode, opts, excludedCount, onExclude, onResetExcluded }) => {
   if (items.length === 0) {
     return (
       <div className="bg-cream-50 border border-cream-400 p-16 text-center">
@@ -1579,7 +1651,7 @@ const Preview = ({ items, theme, dateLabels }) => {
   }
   return (
     <div className="bg-cream-50 border border-cream-400">
-      <div className="px-6 py-5 border-b border-cream-400 flex items-center justify-between">
+      <div className="px-6 py-5 border-b border-cream-400 flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h2 className="text-2xl font-medium tracking-tight">미리보기</h2>
           <p className="text-xs text-stone-600 mt-1 font-light">
@@ -1588,6 +1660,17 @@ const Preview = ({ items, theme, dateLabels }) => {
               : '상품별 누적 데이터 (옵션·이미지 정보 없음)'}
           </p>
         </div>
+        {excludedCount > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-stone-600">제외 {excludedCount}개 (다음 후보로 자동 보충됨)</span>
+            <button
+              onClick={onResetExcluded}
+              className="text-stone-700 hover:text-stone-900 underline underline-offset-2"
+            >
+              초기화
+            </button>
+          </div>
+        )}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -1608,6 +1691,7 @@ const Preview = ({ items, theme, dateLabels }) => {
               {theme === 'recommend' && (
                 <th className="px-3 py-2 text-left font-medium whitespace-nowrap">선정 사유</th>
               )}
+              <th className="px-2 py-2 text-center font-medium whitespace-nowrap w-10">제외</th>
             </tr>
           </thead>
           <tbody>
@@ -1645,10 +1729,25 @@ const Preview = ({ items, theme, dateLabels }) => {
                     </span>
                   </td>
                 )}
+                <td className="px-2 py-2 text-center whitespace-nowrap">
+                  <button
+                    onClick={() => onExclude(it.productName)}
+                    title="이 상품 빼고 다음 후보로 채우기"
+                    className="w-7 h-7 inline-flex items-center justify-center text-stone-400 hover:bg-stone-900 hover:text-cream-50 border border-cream-400 hover:border-stone-900 transition"
+                  >
+                    <LucideX size={14} />
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="px-6 py-5 border-t border-cream-300 bg-cream-100">
+        <h3 className="text-sm font-semibold text-stone-700 mb-2 tracking-tight">선정 사유 브리핑</h3>
+        <p className="text-sm text-stone-700 leading-relaxed">
+          {buildBriefing(theme, opts, mode, items)}
+        </p>
       </div>
     </div>
   );
