@@ -68,8 +68,10 @@ const parseInt0 = (v) => {
   return isNaN(n) ? 0 : n;
 };
 
+const SEASON_VALUES = ['S/S', 'F/W', '사계절'];
 const extractSeason = (purchaseName) => {
   if (!purchaseName) return '';
+  if (/사계절|ALL\s*SEASON|ALLSEASON/i.test(purchaseName)) return '사계절';
   const m = purchaseName.match(/(S\/S|F\/W)/i);
   return m ? m[1].toUpperCase() : '';
 };
@@ -352,8 +354,8 @@ const filterByTheme = (theme, opts, groups) => {
   if (theme === 'package') {
     list = list.filter(g => g.category === '패키지');
   }
-  if (opts.seasonFilter) {
-    list = list.filter(g => g.season === opts.seasonFilter);
+  if (opts.seasonFilters?.length > 0) {
+    list = list.filter(g => opts.seasonFilters.includes(g.season));
   }
   return list;
 };
@@ -389,8 +391,8 @@ const RECOMMEND_PLAN = [
 ];
 
 const pickRecommendation = (groups, opts) => {
-  const seasonFiltered = opts.seasonFilter
-    ? groups.filter(g => g.season === opts.seasonFilter)
+  const seasonFiltered = opts.seasonFilters?.length > 0
+    ? groups.filter(g => opts.seasonFilters.includes(g.season))
     : groups;
 
   const picks = [];
@@ -607,7 +609,7 @@ const exportSingleTheme = async (items, theme, opts, embedImages, onProgress) =>
     info.push(['스테디셀러 최소 개월', opts.minMonths]);
     info.push(['스테디셀러 일평균 임계', `${opts.minAvgDaily} 개/일`]);
   }
-  if (opts.seasonFilter) info.push(['시즌 필터', opts.seasonFilter]);
+  if (opts.seasonFilters?.length > 0) info.push(['시즌 필터', opts.seasonFilters.join(', ')]);
   if (opts.useDiversity) info.push(['카테고리 다양성', `한 카테고리 최대 ${opts.maxPerCategory}개`]);
   buildMetaSheet(wb, info);
 
@@ -659,7 +661,7 @@ const exportAllThemes = async (groups, mode, opts, embedImages, brands, categori
     ['실행시각', new Date().toLocaleString('ko-KR')],
     ['시트 수', sheetPlans.length],
   ];
-  if (opts.seasonFilter) info.push(['시즌 필터', opts.seasonFilter]);
+  if (opts.seasonFilters?.length > 0) info.push(['시즌 필터', opts.seasonFilters.join(', ')]);
   if (opts.useDiversity) info.push(['카테고리 다양성', `한 카테고리 최대 ${opts.maxPerCategory}개`]);
   buildMetaSheet(wb, info);
 
@@ -686,7 +688,7 @@ const App = () => {
     minEarly: 3,
     minStock: 30,
     maxSales: 5,
-    seasonFilter: '',
+    seasonFilters: [],
     useDiversity: true,
     maxPerCategory: 3,
   });
@@ -786,36 +788,47 @@ const App = () => {
   const ThemeIcon = themeIcon;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 text-slate-900">
-      <div className="w-full px-6 py-6">
-        <header className="mb-6 flex items-center justify-between gap-4 flex-wrap">
+    <div className="min-h-screen bg-cream-300 text-stone-900">
+      <div className="w-full px-8 py-6 bg-cream-100 min-h-screen border-x border-cream-400">
+        <header className="mb-6 pb-5 border-b border-cream-400 flex items-end justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl font-bold flex items-center gap-2">
-              <LucideSparkles className="text-amber-500" size={32} />
+            <h1 className="font-serif text-4xl font-medium flex items-baseline gap-3 tracking-tight">
               ADpicker
+              <span className="font-sans text-xs font-normal text-stone-500 tracking-wide uppercase">v1</span>
             </h1>
-            <p className="text-sm text-slate-500 mt-1">인스타 메타광고 아이템 선정기</p>
+            <p className="text-sm text-stone-600 mt-2 font-light">인스타 메타광고 아이템 선정기</p>
           </div>
           {fileName && (
             <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200">
-                <label className="text-xs font-medium text-slate-600">시즌 필터</label>
-                <select
-                  value={opts.seasonFilter}
-                  onChange={e => setOpts({ ...opts, seasonFilter: e.target.value })}
-                  className="text-sm border-0 bg-transparent focus:outline-none focus:ring-0 cursor-pointer"
-                >
-                  <option value="">전체</option>
-                  <option value="S/S">S/S만</option>
-                  <option value="F/W">F/W만</option>
-                </select>
+              <div className="flex items-center gap-1.5 bg-cream-50 px-3 py-1.5 border border-cream-400">
+                <label className="text-xs font-medium text-stone-600 mr-1">시즌</label>
+                {SEASON_VALUES.map(v => {
+                  const active = (opts.seasonFilters || []).includes(v);
+                  return (
+                    <button
+                      key={v}
+                      onClick={() => {
+                        const cur = opts.seasonFilters || [];
+                        const next = cur.includes(v) ? cur.filter(x => x !== v) : [...cur, v];
+                        setOpts({ ...opts, seasonFilters: next });
+                      }}
+                      className={`px-2 py-0.5 text-xs border transition ${
+                        active
+                          ? 'bg-stone-900 text-cream-50 border-stone-900'
+                          : 'bg-cream-50 text-stone-700 border-cream-400 hover:border-stone-700'
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  );
+                })}
               </div>
               <button
                 onClick={handleExportSingle}
                 disabled={exporting || preview.length === 0}
-                className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 text-sm transition"
+                className="bg-stone-900 hover:bg-stone-800 disabled:bg-cream-300 disabled:text-stone-400 disabled:cursor-not-allowed text-cream-50 px-4 py-2 font-medium flex items-center gap-2 text-sm transition"
               >
-                <LucideDownload size={16} />
+                <LucideDownload size={14} />
                 {exporting === 'single'
                   ? exportProgress?.phase === 'image'
                     ? `이미지 ${exportProgress.cur}/${exportProgress.total}...`
@@ -825,9 +838,9 @@ const App = () => {
               <button
                 onClick={() => setShowSelector(true)}
                 disabled={exporting || groups.length === 0}
-                className="bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 text-sm transition"
+                className="bg-cream-50 hover:bg-cream-200 disabled:bg-cream-200 disabled:text-stone-400 disabled:cursor-not-allowed text-stone-900 border border-stone-900 px-4 py-2 font-medium flex items-center gap-2 text-sm transition"
               >
-                <LucideDownload size={16} />
+                <LucideDownload size={14} />
                 {exporting === 'all'
                   ? exportProgress?.phase === 'image'
                     ? `이미지 ${exportProgress.cur}/${exportProgress.total}...`
@@ -836,10 +849,10 @@ const App = () => {
                       : '생성 중...'
                   : '선택 다운'}
               </button>
-              <div className="text-xs text-slate-500 flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200">
+              <div className="text-xs text-stone-600 flex items-center gap-2 bg-cream-50 px-3 py-2 border border-cream-400">
                 <LucideFileSpreadsheet size={14} />
                 {fileName}
-                <span className="text-slate-400">·</span>
+                <span className="text-stone-400">·</span>
                 {skus.length > 0
                   ? `${skus.length.toLocaleString()} SKU · ${groups.length.toLocaleString()} 상품`
                   : `${groups.length.toLocaleString()} 상품 (누적)`}
@@ -849,7 +862,7 @@ const App = () => {
         </header>
 
         {error && (
-          <div className="mb-4 bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-lg flex items-start gap-2">
+          <div className="mb-4 bg-rose-50 border border-rose-300 text-rose-900 px-4 py-3 flex items-start gap-2">
             <LucideAlertCircle size={18} className="mt-0.5 shrink-0" />
             <span className="flex-1 text-sm">{error}</span>
             <button onClick={() => setError(null)}><LucideX size={16} /></button>
@@ -866,22 +879,27 @@ const App = () => {
           <div className="grid grid-cols-12 gap-6">
             <aside className="col-span-12 lg:col-span-4 xl:col-span-3 space-y-4">
               <Panel title={`주제 선택 ${mode ? `· ${mode.toUpperCase()} 모드` : ''}`} icon={ThemeIcon}>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {visibleThemes.map(t => {
+                <div className="grid grid-cols-2 gap-0 border border-cream-400">
+                  {visibleThemes.map((t, idx) => {
                     const Icon = t.icon;
                     const active = theme === t.id;
+                    const col = idx % 2;
+                    const row = Math.floor(idx / 2);
+                    const totalRows = Math.ceil(visibleThemes.length / 2);
                     return (
                       <button
                         key={t.id}
                         onClick={() => setTheme(t.id)}
                         title={t.desc}
-                        className={`flex flex-col items-center justify-center gap-1 px-2 py-2.5 rounded-lg text-center transition border ${
+                        className={`flex flex-col items-center justify-center gap-1.5 px-2 py-3 text-center transition ${
+                          col === 0 ? 'border-r border-cream-400' : ''
+                        } ${row < totalRows - 1 ? 'border-b border-cream-400' : ''} ${
                           active
-                            ? 'bg-slate-900 text-white border-slate-900'
-                            : 'bg-white border-slate-200 hover:border-slate-400'
+                            ? 'bg-stone-900 text-cream-50'
+                            : 'bg-cream-50 text-stone-800 hover:bg-cream-100'
                         }`}
                       >
-                        <Icon size={18} className={active ? 'text-amber-300' : 'text-slate-500'} />
+                        <Icon size={18} strokeWidth={1.5} className={active ? 'text-cream-50' : 'text-stone-700'} />
                         <div className="text-xs font-medium leading-tight">{t.label}</div>
                       </button>
                     );
@@ -906,7 +924,7 @@ const App = () => {
                   setFileName('');
                   setMode(null);
                 }}
-                className="w-full text-slate-500 hover:text-slate-700 text-sm py-2"
+                className="w-full text-stone-500 hover:text-stone-900 text-xs py-2 underline underline-offset-4"
               >
                 다른 파일 불러오기
               </button>
@@ -958,34 +976,34 @@ const ThemeSelectorModal = ({
   }, 0);
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={onCancel}>
+    <div className="fixed inset-0 z-50 bg-stone-900/40 flex items-center justify-center p-4" onClick={onCancel}>
       <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden"
+        className="bg-cream-50 shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+        <div className="px-5 py-4 border-b border-cream-400 flex items-center justify-between">
           <div>
             <h2 className="font-semibold">다운받을 주제 선택</h2>
-            <p className="text-xs text-slate-500 mt-0.5">{mode?.toUpperCase()} 모드 · 체크된 주제만 시트로 생성</p>
+            <p className="text-xs text-stone-500 mt-0.5">{mode?.toUpperCase()} 모드 · 체크된 주제만 시트로 생성</p>
           </div>
-          <button onClick={onCancel} className="text-slate-400 hover:text-slate-700">
+          <button onClick={onCancel} className="text-stone-400 hover:text-stone-700">
             <LucideX size={20} />
           </button>
         </div>
 
-        <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between text-xs">
+        <div className="px-5 py-3 border-b border-cream-300 flex items-center justify-between text-xs">
           <div className="flex gap-2">
             <button
               onClick={() => setSelected(visibleThemes.map(t => t.id))}
-              className="text-slate-600 hover:text-slate-900 underline"
+              className="text-stone-600 hover:text-stone-900 underline"
             >전체 선택</button>
-            <span className="text-slate-300">·</span>
+            <span className="text-stone-300">·</span>
             <button
               onClick={() => setSelected([])}
-              className="text-slate-600 hover:text-slate-900 underline"
+              className="text-stone-600 hover:text-stone-900 underline"
             >해제</button>
           </div>
-          <span className="text-slate-500">총 {totalSheets} 시트 생성 예정</span>
+          <span className="text-stone-500">총 {totalSheets} 시트 생성 예정</span>
         </div>
 
         <div className="overflow-y-auto px-5 py-3 space-y-1.5">
@@ -995,8 +1013,8 @@ const ThemeSelectorModal = ({
             return (
               <label
                 key={t.id}
-                className={`flex items-start gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition ${
-                  checked ? 'bg-slate-50 border-slate-300' : 'bg-white border-slate-200 hover:border-slate-300'
+                className={`flex items-start gap-3 px-3 py-2.5 border cursor-pointer transition ${
+                  checked ? 'bg-cream-100 border-cream-400' : 'bg-cream-50 border-cream-400 hover:border-cream-400'
                 }`}
               >
                 <input
@@ -1005,20 +1023,20 @@ const ThemeSelectorModal = ({
                   onChange={() => toggle(t.id)}
                   className="mt-1"
                 />
-                <Icon size={16} className="mt-0.5 text-slate-500 shrink-0" />
+                <Icon size={16} className="mt-0.5 text-stone-500 shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="text-sm font-medium">{t.label}</span>
-                    <span className="text-xs text-slate-400 shrink-0">{sheetEstimate(t.id)}</span>
+                    <span className="text-xs text-stone-400 shrink-0">{sheetEstimate(t.id)}</span>
                   </div>
-                  <p className="text-xs text-slate-500 mt-0.5">{t.desc}</p>
+                  <p className="text-xs text-stone-500 mt-0.5">{t.desc}</p>
                 </div>
               </label>
             );
           })}
         </div>
 
-        <div className="px-5 py-3 border-t border-slate-100 space-y-2 text-sm bg-slate-50">
+        <div className="px-5 py-3 border-t border-cream-300 space-y-2 text-sm bg-cream-100">
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
@@ -1032,7 +1050,7 @@ const ThemeSelectorModal = ({
               max="8"
               value={opts.maxPerCategory}
               onChange={e => setOpts({ ...opts, maxPerCategory: parseInt(e.target.value) || 3 })}
-              className="w-12 px-2 py-0.5 text-sm border border-slate-200 rounded mx-1"
+              className="w-12 px-2 py-0.5 text-sm border border-cream-400 rounded mx-1"
             />
             개)
           </label>
@@ -1042,20 +1060,20 @@ const ThemeSelectorModal = ({
               checked={embedImages}
               onChange={e => setEmbedImages(e.target.checked)}
             />
-            <LucideImage size={14} className="text-slate-500" />
+            <LucideImage size={14} className="text-stone-500" />
             이미지 셀에 임베드 (느려짐, 끄면 URL 링크만)
           </label>
         </div>
 
-        <div className="px-5 py-3 border-t border-slate-200 flex items-center justify-end gap-2 bg-white">
+        <div className="px-5 py-3 border-t border-cream-400 flex items-center justify-end gap-2 bg-cream-50">
           <button
             onClick={onCancel}
-            className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900"
+            className="px-4 py-2 text-sm text-stone-600 hover:text-stone-900"
           >취소</button>
           <button
             onClick={() => onConfirm(selected)}
             disabled={selected.length === 0}
-            className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white px-5 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+            className="bg-stone-900 hover:bg-stone-800 disabled:bg-cream-300 text-white px-5 py-2 text-sm font-medium flex items-center gap-2"
           >
             <LucideDownload size={14} />
             다운로드
@@ -1078,15 +1096,15 @@ const UploadArea = ({ onFile, parsing, inputRef }) => {
         const f = e.dataTransfer.files[0];
         if (f) onFile(f);
       }}
-      className={`border-2 border-dashed rounded-2xl p-16 text-center transition ${
-        drag ? 'border-slate-900 bg-slate-50' : 'border-slate-300 bg-white'
+      className={`border border-dashed p-20 text-center transition ${
+        drag ? 'border-stone-900 bg-cream-200' : 'border-cream-400 bg-cream-50'
       }`}
     >
-      <LucideUpload size={48} className="mx-auto text-slate-400 mb-4" />
-      <h2 className="text-xl font-semibold mb-2">판매 데이터 파일을 올려주세요</h2>
-      <p className="text-sm text-slate-500 mb-6">
-        <span className="font-medium">stk_forOptSalesInfo .xls</span>(SKU 단위·이미지 포함) 또는{' '}
-        <span className="font-medium">sts_prdListStatistics .csv</span>(상품 누적) 둘 다 자동 인식해요.
+      <LucideUpload size={40} strokeWidth={1.2} className="mx-auto text-stone-500 mb-6" />
+      <h2 className="font-serif text-3xl font-medium mb-3 tracking-tight">판매 데이터 파일을 올려주세요</h2>
+      <p className="text-sm text-stone-600 mb-8 font-light leading-relaxed">
+        <span className="font-medium text-stone-800">stk_forOptSalesInfo .xls</span> (SKU 단위 · 이미지 포함) 또는{' '}
+        <span className="font-medium text-stone-800">sts_prdListStatistics .csv</span> (상품 누적) — 둘 다 자동 인식해요.
         <br />파일을 끌어다 놓거나 아래 버튼으로 선택하세요. 데이터는 브라우저에서만 처리됩니다.
       </p>
       <input
@@ -1099,7 +1117,7 @@ const UploadArea = ({ onFile, parsing, inputRef }) => {
       <button
         onClick={() => inputRef.current?.click()}
         disabled={parsing}
-        className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white px-6 py-2.5 rounded-lg font-medium"
+        className="bg-stone-900 hover:bg-stone-800 disabled:bg-stone-400 text-cream-50 px-8 py-3 font-medium tracking-wide text-sm"
       >
         {parsing ? '파싱 중...' : '파일 선택'}
       </button>
@@ -1108,10 +1126,10 @@ const UploadArea = ({ onFile, parsing, inputRef }) => {
 };
 
 const Panel = ({ title, icon: Icon, children }) => (
-  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-    <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
-      {Icon && <Icon size={15} className="text-slate-500" />}
-      <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
+  <div className="bg-cream-50 border border-cream-400">
+    <div className="px-4 py-3 border-b border-cream-400 flex items-center gap-2">
+      {Icon && <Icon size={14} strokeWidth={1.5} className="text-stone-600" />}
+      <h3 className="font-serif text-sm font-medium text-stone-800 tracking-tight">{title}</h3>
     </div>
     <div className="p-4">{children}</div>
   </div>
@@ -1129,32 +1147,32 @@ const ThemeOptions = ({ theme, opts, setOpts, categories, brands }) => {
     return (
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="text-xs text-slate-600 font-medium">
-            카테고리 선택 ({categories.length}개 중 {selected.length} 선택)
+          <label className="text-xs text-stone-600">
+            카테고리 ({categories.length}개 중 {selected.length})
           </label>
-          <div className="flex gap-1">
+          <div className="flex gap-1.5">
             <button
               onClick={() => set('categories', categories)}
-              className="text-xs text-slate-500 hover:text-slate-800 underline"
+              className="text-xs text-stone-600 hover:text-stone-900 underline underline-offset-2"
             >전체</button>
-            <span className="text-slate-300">·</span>
+            <span className="text-stone-300">·</span>
             <button
               onClick={() => set('categories', [])}
-              className="text-xs text-slate-500 hover:text-slate-800 underline"
+              className="text-xs text-stone-600 hover:text-stone-900 underline underline-offset-2"
             >해제</button>
           </div>
         </div>
-        <div className="flex flex-wrap gap-1.5 max-h-60 overflow-y-auto p-1">
+        <div className="flex flex-wrap gap-1 max-h-60 overflow-y-auto py-1">
           {categories.map(c => {
             const active = selected.includes(c);
             return (
               <button
                 key={c}
                 onClick={() => toggle(c)}
-                className={`px-2.5 py-1 rounded-full text-xs border transition ${
+                className={`px-2.5 py-1 text-xs border transition ${
                   active
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-white text-slate-700 border-slate-300 hover:border-slate-500'
+                    ? 'bg-stone-900 text-cream-50 border-stone-900'
+                    : 'bg-cream-50 text-stone-700 border-cream-400 hover:border-stone-700'
                 }`}
               >
                 {c}
@@ -1163,7 +1181,7 @@ const ThemeOptions = ({ theme, opts, setOpts, categories, brands }) => {
           })}
         </div>
         {selected.length === 0 && (
-          <p className="text-xs text-amber-600 mt-2">⚠ 한 개 이상 선택해야 결과가 나와요</p>
+          <p className="text-xs text-rose-700 mt-2">한 개 이상 선택해야 결과가 나와요</p>
         )}
       </div>
     );
@@ -1171,22 +1189,22 @@ const ThemeOptions = ({ theme, opts, setOpts, categories, brands }) => {
   if (theme === 'brand') {
     return (
       <div>
-        <label className="text-xs text-slate-600 block mb-1 font-medium">
+        <label className="text-xs text-stone-600 block mb-1 font-medium">
           브랜드 선택 ({brands.length}개)
         </label>
         <select
           value={opts.brand}
           onChange={e => set('brand', e.target.value)}
-          className="w-full px-2 py-2 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-slate-400"
+          className="w-full px-2 py-2 text-sm border border-cream-400 bg-cream-50 focus:outline-none focus:border-stone-700"
         >
           <option value="">— 브랜드를 선택하세요 —</option>
           {brands.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
-        <p className="text-xs text-slate-500 mt-2">
+        <p className="text-xs text-stone-500 mt-2">
           상품명 앞 prefix(FP·JM·WV·PS·EZ·TWN·PL·DY) 기준
         </p>
         {!opts.brand && (
-          <p className="text-xs text-amber-600 mt-2">⚠ 브랜드를 선택해야 결과가 나와요</p>
+          <p className="text-xs text-rose-700 mt-2">브랜드를 선택해야 결과가 나와요</p>
         )}
       </div>
     );
@@ -1194,16 +1212,16 @@ const ThemeOptions = ({ theme, opts, setOpts, categories, brands }) => {
   if (theme === 'newProduct') {
     return (
       <div>
-        <label className="text-xs text-slate-600 block mb-1">최근 N개월 이내 등록</label>
+        <label className="text-xs text-stone-600 block mb-1">최근 N개월 이내 등록</label>
         <input
           type="number"
           min="1"
           max="60"
           value={opts.newMonths}
           onChange={e => set('newMonths', parseInt(e.target.value) || 6)}
-          className="w-24 px-2 py-1 text-sm border border-slate-200 rounded"
+          className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
         />
-        <span className="text-xs text-slate-500 ml-1">개월</span>
+        <span className="text-xs text-stone-500 ml-1">개월</span>
       </div>
     );
   }
@@ -1211,30 +1229,30 @@ const ThemeOptions = ({ theme, opts, setOpts, categories, brands }) => {
     return (
       <div className="space-y-3">
         <div>
-          <label className="text-xs text-slate-600 block mb-1">등록 후 최소 N개월 경과</label>
+          <label className="text-xs text-stone-600 block mb-1">등록 후 최소 N개월 경과</label>
           <input
             type="number"
             min="6"
             max="120"
             value={opts.minMonths}
             onChange={e => set('minMonths', parseInt(e.target.value) || 24)}
-            className="w-24 px-2 py-1 text-sm border border-slate-200 rounded"
+            className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
           />
-          <span className="text-xs text-slate-500 ml-1">개월</span>
+          <span className="text-xs text-stone-500 ml-1">개월</span>
         </div>
         <div>
-          <label className="text-xs text-slate-600 block mb-1">일평균 판매량 임계치</label>
+          <label className="text-xs text-stone-600 block mb-1">일평균 판매량 임계치</label>
           <input
             type="number"
             min="0"
             step="0.1"
             value={opts.minAvgDaily}
             onChange={e => set('minAvgDaily', parseFloat(e.target.value) || 0)}
-            className="w-24 px-2 py-1 text-sm border border-slate-200 rounded"
+            className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
           />
-          <span className="text-xs text-slate-500 ml-1">개/일 이상</span>
+          <span className="text-xs text-stone-500 ml-1">개/일 이상</span>
         </div>
-        <p className="text-xs text-slate-500 leading-relaxed">
+        <p className="text-xs text-stone-500 leading-relaxed">
           점수 = 일평균수량 × log(1 + 햇수). 기간이 긴 .xls는 7일 합계를 일수로 나눠 계산하고,
           누적 .csv는 파일의 일평균수량을 그대로 써요.
         </p>
@@ -1244,15 +1262,15 @@ const ThemeOptions = ({ theme, opts, setOpts, categories, brands }) => {
   if (theme === 'rising') {
     return (
       <div>
-        <label className="text-xs text-slate-600 block mb-1">최소 7일 판매량</label>
+        <label className="text-xs text-stone-600 block mb-1">최소 7일 판매량</label>
         <input
           type="number"
           min="0"
           value={opts.minSales}
           onChange={e => set('minSales', parseInt(e.target.value) || 0)}
-          className="w-24 px-2 py-1 text-sm border border-slate-200 rounded"
+          className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
         />
-        <span className="text-xs text-slate-500 ml-1">개 이상</span>
+        <span className="text-xs text-stone-500 ml-1">개 이상</span>
       </div>
     );
   }
@@ -1260,17 +1278,17 @@ const ThemeOptions = ({ theme, opts, setOpts, categories, brands }) => {
     return (
       <div className="space-y-3">
         <div>
-          <label className="text-xs text-slate-600 block mb-1">전반 4일 최소 판매량</label>
+          <label className="text-xs text-stone-600 block mb-1">전반 4일 최소 판매량</label>
           <input
             type="number"
             min="1"
             value={opts.minEarly}
             onChange={e => set('minEarly', parseInt(e.target.value) || 3)}
-            className="w-24 px-2 py-1 text-sm border border-slate-200 rounded"
+            className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
           />
-          <span className="text-xs text-slate-500 ml-1">개 이상</span>
+          <span className="text-xs text-stone-500 ml-1">개 이상</span>
         </div>
-        <p className="text-xs text-slate-500 leading-relaxed">
+        <p className="text-xs text-stone-500 leading-relaxed">
           원래 잘 팔리던 상품 중 후반 4일에 판매가 떨어진 것을 우선. 점수 = 감소율 × log(1+전반판매)
         </p>
       </div>
@@ -1280,52 +1298,52 @@ const ThemeOptions = ({ theme, opts, setOpts, categories, brands }) => {
     return (
       <div className="space-y-3">
         <div>
-          <label className="text-xs text-slate-600 block mb-1">최소 현재재고</label>
+          <label className="text-xs text-stone-600 block mb-1">최소 현재재고</label>
           <input
             type="number"
             min="1"
             value={opts.minStock}
             onChange={e => set('minStock', parseInt(e.target.value) || 30)}
-            className="w-24 px-2 py-1 text-sm border border-slate-200 rounded"
+            className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
           />
-          <span className="text-xs text-slate-500 ml-1">개 이상</span>
+          <span className="text-xs text-stone-500 ml-1">개 이상</span>
         </div>
         <div>
-          <label className="text-xs text-slate-600 block mb-1">최대 7일 판매량</label>
+          <label className="text-xs text-stone-600 block mb-1">최대 7일 판매량</label>
           <input
             type="number"
             min="0"
             value={opts.maxSales}
             onChange={e => set('maxSales', parseInt(e.target.value) || 5)}
-            className="w-24 px-2 py-1 text-sm border border-slate-200 rounded"
+            className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
           />
-          <span className="text-xs text-slate-500 ml-1">개 이하</span>
+          <span className="text-xs text-stone-500 ml-1">개 이하</span>
         </div>
-        <p className="text-xs text-slate-500 leading-relaxed">
+        <p className="text-xs text-stone-500 leading-relaxed">
           점수 = 재고 ÷ (판매+1). 재고 많고 판매 적을수록 상위.
         </p>
       </div>
     );
   }
-  return <p className="text-xs text-slate-500">이 주제는 별도 옵션이 없어요.</p>;
+  return <p className="text-xs text-stone-500">이 주제는 별도 옵션이 없어요.</p>;
 };
 
 const Preview = ({ items, theme, dateLabels }) => {
   if (items.length === 0) {
     return (
-      <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
-        <LucideAlertCircle className="mx-auto text-slate-400 mb-3" size={32} />
-        <p className="text-slate-600 font-medium">선정할 상품이 없어요</p>
-        <p className="text-sm text-slate-500 mt-1">필터/옵션을 조정해 보세요.</p>
+      <div className="bg-cream-50 border border-cream-400 p-16 text-center">
+        <LucideAlertCircle strokeWidth={1.2} className="mx-auto text-stone-400 mb-4" size={32} />
+        <p className="font-serif text-xl text-stone-800">선정할 상품이 없어요</p>
+        <p className="text-sm text-stone-500 mt-2 font-light">필터/옵션을 조정해 보세요.</p>
       </div>
     );
   }
   return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+    <div className="bg-cream-50 border border-cream-400">
+      <div className="px-6 py-5 border-b border-cream-400 flex items-center justify-between">
         <div>
-          <h2 className="font-semibold">미리보기</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <h2 className="font-serif text-2xl font-medium tracking-tight">미리보기</h2>
+          <p className="text-xs text-stone-600 mt-1 font-light">
             {items.length}개 상품 · {dateLabels.length > 0
               ? `데이터 기간: ${dateLabels[0]} ~ ${dateLabels[dateLabels.length - 1]}`
               : '상품별 누적 데이터 (옵션·이미지 정보 없음)'}
@@ -1334,7 +1352,7 @@ const Preview = ({ items, theme, dateLabels }) => {
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-600">
+          <thead className="bg-cream-100 text-stone-600 border-b border-cream-400">
             <tr>
               <th className="px-3 py-2 text-left font-medium w-10 whitespace-nowrap">#</th>
               <th className="px-3 py-2 text-left font-medium w-16 whitespace-nowrap">이미지</th>
@@ -1355,10 +1373,10 @@ const Preview = ({ items, theme, dateLabels }) => {
           </thead>
           <tbody>
             {items.map((it, i) => (
-              <tr key={it.productName} className="border-t border-slate-100 hover:bg-slate-50 h-[68px]">
-                <td className="px-3 py-2 font-medium text-slate-500 whitespace-nowrap">{i + 1}</td>
+              <tr key={it.productName} className="border-t border-cream-300 hover:bg-cream-100 h-[68px]">
+                <td className="px-3 py-2 font-medium text-stone-500 whitespace-nowrap">{i + 1}</td>
                 <td className="px-3 py-2 whitespace-nowrap">
-                  <div className="w-12 h-12 bg-slate-100 rounded border border-slate-200 overflow-hidden flex items-center justify-center">
+                  <div className="w-12 h-12 bg-cream-200 border border-cream-400 overflow-hidden flex items-center justify-center">
                     {it.imageUrl && it.imageUrl !== '이미지없음' ? (
                       <img
                         src={it.imageUrl}
@@ -1367,23 +1385,23 @@ const Preview = ({ items, theme, dateLabels }) => {
                         onError={(e) => { e.target.style.display = 'none'; }}
                       />
                     ) : (
-                      <span className="text-xs text-slate-400">없음</span>
+                      <span className="text-xs text-stone-400">없음</span>
                     )}
                   </div>
                 </td>
                 <td className="px-3 py-2 font-medium whitespace-nowrap">{it.productName}</td>
-                <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{it.category}</td>
-                <td className="px-3 py-2 text-slate-600 text-xs whitespace-nowrap">{it.season || '-'}</td>
+                <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{it.category}</td>
+                <td className="px-3 py-2 text-stone-600 text-xs whitespace-nowrap">{it.season || '-'}</td>
                 <td className="px-3 py-2 text-right font-medium whitespace-nowrap">{it.totalSales}</td>
-                <td className="px-3 py-2 text-slate-600 text-xs whitespace-nowrap">{it.bestSku?.optionName || '-'}</td>
+                <td className="px-3 py-2 text-stone-600 text-xs whitespace-nowrap">{it.bestSku?.optionName || '-'}</td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">{it.bestSku?.salesTotal || 0}</td>
-                <td className="px-3 py-2 text-slate-600 text-xs whitespace-nowrap">{it.bestSku2?.optionName || '-'}</td>
+                <td className="px-3 py-2 text-stone-600 text-xs whitespace-nowrap">{it.bestSku2?.optionName || '-'}</td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">{it.bestSku2?.salesTotal || 0}</td>
-                <td className="px-3 py-2 text-right text-slate-600 whitespace-nowrap">{it.totalCurrentStock.toLocaleString()}</td>
-                <td className="px-3 py-2 text-right text-slate-600 whitespace-nowrap">{it.totalRevenue.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{it.totalCurrentStock.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{it.totalRevenue.toLocaleString()}</td>
                 {theme === 'recommend' && (
                   <td className="px-3 py-2 text-xs whitespace-nowrap">
-                    <span className="inline-flex px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">
+                    <span className="inline-flex px-2 py-0.5 bg-stone-900 text-cream-50 font-medium">
                       {reasonLabel(it.pickReason)}
                     </span>
                   </td>
