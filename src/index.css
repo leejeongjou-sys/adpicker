@@ -4,14 +4,15 @@
 
 @layer base {
   body {
-    font-family: '"Noto Sans KR"', ui-sans-serif, system-ui, sans-serif;
+    font-family: 'Pretendard Variable', Pretendard, ui-sans-serif, system-ui, -apple-system, sans-serif;
     background-color: #D9CDB9;
     color: #1A1A1A;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'ss02';
   }
-  h1, h2, h3 {
-    font-family: '"Playfair Display"', '"Noto Serif KR"', serif;
-    letter-spacing: -0.01em;
+  h1, h2, h3, h4 {
+    font-family: 'Pretendard Variable', Pretendard, ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: -0.02em;
   }
 }

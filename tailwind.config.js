@@ -17,9 +17,8 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['"Noto Sans KR"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-        serif: ['"Playfair Display"', '"Noto Serif KR"', 'ui-serif', 'Georgia', 'serif'],
-        display: ['"Playfair Display"', '"Noto Serif KR"', 'serif'],
+        sans: ['"Pretendard Variable"', 'Pretendard', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
+        display: ['"Pretendard Variable"', 'Pretendard', 'sans-serif'],
       },
     },
   },

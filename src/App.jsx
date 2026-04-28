@@ -792,7 +792,7 @@ const App = () => {
       <div className="w-full px-8 py-6 bg-cream-100 min-h-screen border-x border-cream-400">
         <header className="mb-6 pb-5 border-b border-cream-400 flex items-end justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="font-serif text-4xl font-medium flex items-baseline gap-3 tracking-tight">
+            <h1 className="text-4xl font-medium flex items-baseline gap-3 tracking-tight">
               ADpicker
               <span className="font-sans text-xs font-normal text-stone-500 tracking-wide uppercase">v1</span>
             </h1>
@@ -1101,7 +1101,7 @@ const UploadArea = ({ onFile, parsing, inputRef }) => {
       }`}
     >
       <LucideUpload size={40} strokeWidth={1.2} className="mx-auto text-stone-500 mb-6" />
-      <h2 className="font-serif text-3xl font-medium mb-3 tracking-tight">판매 데이터 파일을 올려주세요</h2>
+      <h2 className="text-3xl font-medium mb-3 tracking-tight">판매 데이터 파일을 올려주세요</h2>
       <p className="text-sm text-stone-600 mb-8 font-light leading-relaxed">
         <span className="font-medium text-stone-800">stk_forOptSalesInfo .xls</span> (SKU 단위 · 이미지 포함) 또는{' '}
         <span className="font-medium text-stone-800">sts_prdListStatistics .csv</span> (상품 누적) — 둘 다 자동 인식해요.
@@ -1129,7 +1129,7 @@ const Panel = ({ title, icon: Icon, children }) => (
   <div className="bg-cream-50 border border-cream-400">
     <div className="px-4 py-3 border-b border-cream-400 flex items-center gap-2">
       {Icon && <Icon size={14} strokeWidth={1.5} className="text-stone-600" />}
-      <h3 className="font-serif text-sm font-medium text-stone-800 tracking-tight">{title}</h3>
+      <h3 className="text-sm font-medium text-stone-800 tracking-tight">{title}</h3>
     </div>
     <div className="p-4">{children}</div>
   </div>
@@ -1333,7 +1333,7 @@ const Preview = ({ items, theme, dateLabels }) => {
     return (
       <div className="bg-cream-50 border border-cream-400 p-16 text-center">
         <LucideAlertCircle strokeWidth={1.2} className="mx-auto text-stone-400 mb-4" size={32} />
-        <p className="font-serif text-xl text-stone-800">선정할 상품이 없어요</p>
+        <p className="text-xl text-stone-800">선정할 상품이 없어요</p>
         <p className="text-sm text-stone-500 mt-2 font-light">필터/옵션을 조정해 보세요.</p>
       </div>
     );
@@ -1342,7 +1342,7 @@ const Preview = ({ items, theme, dateLabels }) => {
     <div className="bg-cream-50 border border-cream-400">
       <div className="px-6 py-5 border-b border-cream-400 flex items-center justify-between">
         <div>
-          <h2 className="font-serif text-2xl font-medium tracking-tight">미리보기</h2>
+          <h2 className="text-2xl font-medium tracking-tight">미리보기</h2>
           <p className="text-xs text-stone-600 mt-1 font-light">
             {items.length}개 상품 · {dateLabels.length > 0
               ? `데이터 기간: ${dateLabels[0]} ~ ${dateLabels[dateLabels.length - 1]}`
