@@ -866,7 +866,7 @@ const App = () => {
           <div className="grid grid-cols-12 gap-6">
             <aside className="col-span-12 lg:col-span-4 xl:col-span-3 space-y-4">
               <Panel title={`주제 선택 ${mode ? `· ${mode.toUpperCase()} 모드` : ''}`} icon={ThemeIcon}>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-1.5">
                   {visibleThemes.map(t => {
                     const Icon = t.icon;
                     const active = theme === t.id;
@@ -874,17 +874,15 @@ const App = () => {
                       <button
                         key={t.id}
                         onClick={() => setTheme(t.id)}
-                        className={`flex flex-col items-center justify-start gap-1.5 p-3 rounded-lg text-center transition border min-h-[100px] ${
+                        title={t.desc}
+                        className={`flex flex-col items-center justify-center gap-1 px-2 py-2.5 rounded-lg text-center transition border ${
                           active
-                            ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                            : 'bg-white border-slate-200 hover:border-slate-400 hover:shadow-sm'
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'bg-white border-slate-200 hover:border-slate-400'
                         }`}
                       >
-                        <Icon size={22} className={active ? 'text-amber-300' : 'text-slate-500'} />
-                        <div className="text-sm font-medium leading-tight">{t.label}</div>
-                        <div className={`text-[11px] leading-snug ${active ? 'text-slate-300' : 'text-slate-500'}`}>
-                          {t.desc}
-                        </div>
+                        <Icon size={18} className={active ? 'text-amber-300' : 'text-slate-500'} />
+                        <div className="text-xs font-medium leading-tight">{t.label}</div>
                       </button>
                     );
                   })}
