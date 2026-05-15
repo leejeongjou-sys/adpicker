@@ -365,6 +365,14 @@ const filterByTheme = (theme, opts, groups) => {
   if (opts.minCurrentStock > 0 && !skipStock) {
     list = list.filter(g => g.totalCurrentStock >= opts.minCurrentStock);
   }
+  if (opts.maxAgeDays > 0) {
+    const cutoff = Date.now() - opts.maxAgeDays * 24 * 60 * 60 * 1000;
+    list = list.filter(g => {
+      if (!g.registDate) return false;
+      const d = new Date(g.registDate);
+      return !isNaN(d.getTime()) && d.getTime() >= cutoff;
+    });
+  }
   return list;
 };
 
@@ -404,6 +412,14 @@ const pickRecommendation = (groups, opts) => {
     : groups;
   if (opts.minCurrentStock > 0 && opts._mode !== 'csv') {
     seasonFiltered = seasonFiltered.filter(g => g.totalCurrentStock >= opts.minCurrentStock);
+  }
+  if (opts.maxAgeDays > 0) {
+    const cutoff = Date.now() - opts.maxAgeDays * 24 * 60 * 60 * 1000;
+    seasonFiltered = seasonFiltered.filter(g => {
+      if (!g.registDate) return false;
+      const d = new Date(g.registDate);
+      return !isNaN(d.getTime()) && d.getTime() >= cutoff;
+    });
   }
 
   const picks = [];
@@ -856,6 +872,7 @@ const App = () => {
     minStock: 30,
     maxSales: 5,
     minCurrentStock: 5,
+    maxAgeDays: 0,
     seasonFilters: [],
     useDiversity: true,
     maxPerCategory: 3,
@@ -1390,7 +1407,33 @@ const Panel = ({ title, icon: Icon, children }) => (
   </div>
 );
 
-const ThemeOptions = ({
+const ThemeOptions = (props) => {
+  const inner = <ThemeOptionsInner {...props} />;
+  if (props.theme === 'custom') return inner;
+  const { opts, setOpts } = props;
+  const set = (k, v) => setOpts({ ...opts, [k]: v });
+  return (
+    <>
+      {inner}
+      <div className="pt-3 mt-3 border-t border-cream-400">
+        <label className="text-xs text-stone-600 block mb-1">최근 N일 이내 등록</label>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number"
+            min="0"
+            value={opts.maxAgeDays || 0}
+            onChange={e => set('maxAgeDays', parseInt(e.target.value) || 0)}
+            className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
+          />
+          <span className="text-xs text-stone-500">일</span>
+        </div>
+        <p className="text-xs text-stone-500 mt-1">0 = 전체 (필터 안 함)</p>
+      </div>
+    </>
+  );
+};
+
+const ThemeOptionsInner = ({
   theme, opts, setOpts, categories, brands,
   customQuery, setCustomQuery, apiKey, saveApiKey,
   customLoading, customError, customSpec, customResultsCount, onRunCustom,
