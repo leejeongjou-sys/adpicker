@@ -8,16 +8,16 @@ import {
 import ExcelJS from 'exceljs';
 
 const THEMES = [
-  { id: 'recommend', label: '추천 (통합 8개)', desc: '베스트·급상승·신상·재활성·재고소진 분산 픽', icon: LucideAward, modes: ['xls'] },
+  { id: 'recommend', label: '추천 (통합 8개)', desc: '베스트·신상·급상승 분산 픽', icon: LucideAward, modes: ['xls'] },
   { id: 'bestseller', label: '베스트셀러', desc: '7일 총 판매량 Top 8', icon: LucideStar, modes: ['xls', 'csv'] },
+  { id: 'newProduct', label: '신상품 베스트', desc: '최근 N개월 등록 + 판매량', icon: LucideSparkles, modes: ['xls', 'csv'] },
+  { id: 'brand', label: '브랜드별 베스트', desc: '상품명 prefix 코드로 분류', icon: LucideTag, modes: ['xls', 'csv'] },
+  { id: 'category', label: '카테고리별 베스트', desc: '카테고리 선택 → Top 8', icon: LucideShirt, modes: ['xls', 'csv'] },
+  { id: 'steady', label: '스테디셀러', desc: '오래됐지만 꾸준한 상품', icon: LucidePackage, modes: ['xls', 'csv'] },
   { id: 'rising', label: '급상승(라이징)', desc: '후반 4일 vs 전반 4일 증가율', icon: LucideTrendingUp, modes: ['xls'] },
+  { id: 'overstock', label: '재고 과다', desc: '재고 많고 안 팔리는 상품 (재고 소진용)', icon: LucideArchive, modes: ['xls'] },
   { id: 'declining', label: '판매 감소', desc: '후반에 판매가 떨어진 상품 (재활성용)', icon: LucideTrendingDown, modes: ['xls'] },
   { id: 'package', label: '패키지 베스트', desc: '상품명에 PACK 포함된 상품 Top 8', icon: LucideBox, modes: ['csv'] },
-  { id: 'newProduct', label: '신상품 베스트', desc: '최근 N개월 등록 + 판매량', icon: LucideSparkles, modes: ['xls', 'csv'] },
-  { id: 'category', label: '카테고리별 베스트', desc: '카테고리 선택 → Top 8', icon: LucideShirt, modes: ['xls', 'csv'] },
-  { id: 'brand', label: '브랜드별 베스트', desc: '상품명 prefix 코드로 분류', icon: LucideTag, modes: ['xls', 'csv'] },
-  { id: 'steady', label: '스테디셀러', desc: '오래됐지만 꾸준한 상품', icon: LucidePackage, modes: ['xls', 'csv'] },
-  { id: 'overstock', label: '재고 과다', desc: '재고 많고 안 팔리는 상품 (재고 소진용)', icon: LucideArchive, modes: ['xls'] },
   { id: 'custom', label: '직접 입력', desc: '자연어 조건으로 직접 추출', icon: LucideMessageSquare, modes: ['xls', 'csv'] },
 ];
 
@@ -326,7 +326,7 @@ const computeScore = (theme, opts, group) => {
       const stock = group.totalCurrentStock;
       const sales = group.totalSales;
       if (stock < (opts.minStock ?? 30)) return -1;
-      if (sales > (opts.maxSales ?? 5)) return -1;
+      if (sales > (opts.maxSales ?? 10)) return -1;
       return stock / (sales + 1);
     }
     case 'newProduct': {
@@ -365,14 +365,6 @@ const filterByTheme = (theme, opts, groups) => {
   if (opts.minCurrentStock > 0 && !skipStock) {
     list = list.filter(g => g.totalCurrentStock >= opts.minCurrentStock);
   }
-  if (opts.maxAgeDays > 0) {
-    const cutoff = Date.now() - opts.maxAgeDays * 24 * 60 * 60 * 1000;
-    list = list.filter(g => {
-      if (!g.registDate) return false;
-      const d = new Date(g.registDate);
-      return !isNaN(d.getTime()) && d.getTime() >= cutoff;
-    });
-  }
   return list;
 };
 
@@ -399,11 +391,9 @@ const applyDiversity = (sorted, maxPerCategory, limit) => {
 };
 
 const RECOMMEND_PLAN = [
-  { theme: 'bestseller', n: 3 },
+  { theme: 'bestseller', n: 4 },
+  { theme: 'newProduct', n: 2 },
   { theme: 'rising', n: 2 },
-  { theme: 'newProduct', n: 1 },
-  { theme: 'declining', n: 1 },
-  { theme: 'overstock', n: 1 },
 ];
 
 const pickRecommendation = (groups, opts) => {
@@ -412,14 +402,6 @@ const pickRecommendation = (groups, opts) => {
     : groups;
   if (opts.minCurrentStock > 0 && opts._mode !== 'csv') {
     seasonFiltered = seasonFiltered.filter(g => g.totalCurrentStock >= opts.minCurrentStock);
-  }
-  if (opts.maxAgeDays > 0) {
-    const cutoff = Date.now() - opts.maxAgeDays * 24 * 60 * 60 * 1000;
-    seasonFiltered = seasonFiltered.filter(g => {
-      if (!g.registDate) return false;
-      const d = new Date(g.registDate);
-      return !isNaN(d.getTime()) && d.getTime() >= cutoff;
-    });
   }
 
   const picks = [];
@@ -870,9 +852,8 @@ const App = () => {
     minSales: 2,
     minEarly: 3,
     minStock: 30,
-    maxSales: 5,
+    maxSales: 10,
     minCurrentStock: 5,
-    maxAgeDays: 0,
     seasonFilters: [],
     useDiversity: true,
     maxPerCategory: 3,
@@ -1407,33 +1388,7 @@ const Panel = ({ title, icon: Icon, children }) => (
   </div>
 );
 
-const ThemeOptions = (props) => {
-  const inner = <ThemeOptionsInner {...props} />;
-  if (props.theme === 'custom') return inner;
-  const { opts, setOpts } = props;
-  const set = (k, v) => setOpts({ ...opts, [k]: v });
-  return (
-    <>
-      {inner}
-      <div className="pt-3 mt-3 border-t border-cream-400">
-        <label className="text-xs text-stone-600 block mb-1">최근 N일 이내 등록</label>
-        <div className="flex items-center gap-1.5">
-          <input
-            type="number"
-            min="0"
-            value={opts.maxAgeDays || 0}
-            onChange={e => set('maxAgeDays', parseInt(e.target.value) || 0)}
-            className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
-          />
-          <span className="text-xs text-stone-500">일</span>
-        </div>
-        <p className="text-xs text-stone-500 mt-1">0 = 전체 (필터 안 함)</p>
-      </div>
-    </>
-  );
-};
-
-const ThemeOptionsInner = ({
+const ThemeOptions = ({
   theme, opts, setOpts, categories, brands,
   customQuery, setCustomQuery, apiKey, saveApiKey,
   customLoading, customError, customSpec, customResultsCount, onRunCustom,
@@ -1668,7 +1623,7 @@ const ThemeOptionsInner = ({
             type="number"
             min="0"
             value={opts.maxSales}
-            onChange={e => set('maxSales', parseInt(e.target.value) || 5)}
+            onChange={e => set('maxSales', parseInt(e.target.value) || 10)}
             className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
           />
           <span className="text-xs text-stone-500 ml-1">개 이하</span>
