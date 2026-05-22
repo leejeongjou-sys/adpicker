@@ -6,6 +6,7 @@ import {
   LucideMessageSquare, LucideKey, LucideLoader2, LucideCalendarCheck, LucideSearch
 } from 'lucide-react';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 
 const THEMES = [
   { id: 'recommend', label: '추천 (통합 8개)', desc: '베스트·신상·급상승 분산 픽', icon: LucideAward, modes: ['xls'] },
@@ -255,6 +256,169 @@ const parseAdList = (text) => {
         codes,
         count: parseInt0(get(cCount)) || 1,
       });
+    }
+  }
+  if (campaigns.length === 0) throw new Error('캠페인을 찾을 수 없습니다.');
+  return campaigns;
+};
+
+const decodeXml = (s) => String(s || '')
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
+  .replace(/&amp;/g, '&');
+
+const xlsxBuildRichMap = async (readText) => {
+  const relsText = await readText('xl/richData/_rels/richValueRel.xml.rels');
+  if (!relsText) return null;
+  const relMap = {};
+  for (const m of relsText.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) relMap[m[1]] = m[2];
+  const rvrText = await readText('xl/richData/richValueRel.xml');
+  if (!rvrText) return null;
+  const rvrels = [...rvrText.matchAll(/r:id="([^"]+)"/g)].map(m => m[1]);
+  const rdvText = await readText('xl/richData/rdrichvalue.xml');
+  if (!rdvText) return null;
+  const rvRelIdx = [];
+  for (const m of rdvText.matchAll(/<rv\b[^>]*>([\s\S]*?)<\/rv>/g)) {
+    const vs = [...m[1].matchAll(/<v>([^<]*)<\/v>/g)];
+    rvRelIdx.push(vs.length ? parseInt(vs[0][1], 10) : -1);
+  }
+  const metaText = await readText('xl/metadata.xml');
+  if (!metaText) return null;
+  const fmMatch = metaText.match(/<futureMetadata name="XLRICHVALUE"[\s\S]*?<\/futureMetadata>/);
+  const fmRvb = [];
+  if (fmMatch) {
+    for (const m of fmMatch[0].matchAll(/<bk>([\s\S]*?)<\/bk>/g)) {
+      const rm = m[1].match(/rvb i="(\d+)"/);
+      fmRvb.push(rm ? parseInt(rm[1], 10) : -1);
+    }
+  }
+  const vmMatch = metaText.match(/<valueMetadata[\s\S]*?<\/valueMetadata>/);
+  const vmFmIdx = [];
+  if (vmMatch) {
+    for (const m of vmMatch[0].matchAll(/<bk>([\s\S]*?)<\/bk>/g)) {
+      const rm = m[1].match(/<rc [^>]*v="(\d+)"/);
+      vmFmIdx.push(rm ? parseInt(rm[1], 10) : -1);
+    }
+  }
+  return (vmVal) => {
+    const fmi = vmFmIdx[vmVal - 1];
+    if (fmi == null) return null;
+    const rvi = fmRvb[fmi];
+    if (rvi == null) return null;
+    const reli = rvRelIdx[rvi];
+    if (reli == null) return null;
+    const rid = rvrels[reli];
+    const target = relMap[rid];
+    if (!target) return null;
+    return 'xl/' + target.replace('../', '');
+  };
+};
+
+const isAdListXlsx = async (zip) => {
+  const f = zip.file('xl/workbook.xml');
+  if (!f) return false;
+  const wbXml = await f.async('string');
+  return /name="[^"]*광고리스트[^"]*"/.test(wbXml);
+};
+
+const parseAdListXlsx = async (zip) => {
+  const readText = async (p) => {
+    const f = zip.file(p);
+    return f ? await f.async('string') : null;
+  };
+
+  const wbXml = await readText('xl/workbook.xml');
+  const wbRels = await readText('xl/_rels/workbook.xml.rels');
+  if (!wbXml || !wbRels) throw new Error('워크북을 읽을 수 없습니다.');
+  const ridMap = {};
+  for (const m of wbRels.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) ridMap[m[1]] = m[2];
+  const sheets = [...wbXml.matchAll(/<sheet [^>]*name="([^"]*)"[^>]*r:id="([^"]*)"/g)];
+  let target = null;
+  for (const [, name, rid] of sheets) {
+    if (name === 'SNS광고리스트') target = ridMap[rid];
+  }
+  if (!target) {
+    for (const [, name, rid] of sheets) {
+      if (name.includes('광고리스트') && !name.includes('전주')) { target = ridMap[rid]; break; }
+    }
+  }
+  if (!target) throw new Error('광고리스트 시트를 찾을 수 없습니다.');
+  const sx = await readText('xl/' + target.replace('../', ''));
+  if (!sx) throw new Error('시트를 읽을 수 없습니다.');
+
+  const ssText = await readText('xl/sharedStrings.xml');
+  const sst = [];
+  if (ssText) {
+    for (const m of ssText.matchAll(/<si>([\s\S]*?)<\/si>/g)) {
+      let t = '';
+      for (const tm of m[1].matchAll(/<t[^>]*>([^<]*)<\/t>/g)) t += tm[1];
+      sst.push(decodeXml(t));
+    }
+  }
+
+  const vmToMedia = await xlsxBuildRichMap(readText);
+  const mediaCache = {};
+  const mediaUrl = async (mp) => {
+    if (!mp) return null;
+    if (mediaCache[mp]) return mediaCache[mp];
+    const f = zip.file(mp);
+    if (!f) return null;
+    const blob = await f.async('blob');
+    const url = URL.createObjectURL(blob);
+    mediaCache[mp] = url;
+    return url;
+  };
+
+  const campaigns = [];
+  let cur = null;
+  for (const rm of sx.matchAll(/<row [^>]*r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)) {
+    const rowXml = rm[2];
+    const cells = {};
+    const cellVm = {};
+    for (const cm of rowXml.matchAll(/<c [^>]*?(?:\/>|>[\s\S]*?<\/c>)/g)) {
+      const ctag = cm[0];
+      const refM = ctag.match(/r="([A-Z]+)\d+"/);
+      if (!refM) continue;
+      const col = refM[1];
+      const vmM = ctag.match(/vm="(\d+)"/);
+      if (vmM) cellVm[col] = parseInt(vmM[1], 10);
+      const isStr = /t="s"/.test(ctag);
+      const vM = ctag.match(/<v>([^<]*)<\/v>/);
+      if (vM) {
+        cells[col] = isStr ? (sst[parseInt(vM[1], 10)] || '') : vM[1];
+      } else {
+        const isM = ctag.match(/<is>[\s\S]*?<t[^>]*>([^<]*)<\/t>/);
+        cells[col] = isM ? decodeXml(isM[1]) : '';
+      }
+    }
+    const no = (cells['A'] || '').trim();
+    const name = (cells['B'] || '').trim();
+    const prod = (cells['G'] || '').trim();
+    if (no && name) {
+      const pm = name.match(/\((\d{3,4})\)\s*$/);
+      cur = {
+        no, name,
+        manager: (name.split('_')[0] || '').trim(),
+        status: (cells['C'] || '').trim(),
+        postCode: pm ? pm[1].padStart(4, '0') : '',
+        products: [],
+        thumbVm: cellVm['H'] || cellVm['D'] || null,
+        thumbUrl: null,
+      };
+      campaigns.push(cur);
+    }
+    if (cur && prod) {
+      const codes = prod.match(/[A-Z]{3,5}\d{3,5}/g) || [];
+      cur.products.push({ raw: prod, codes });
+    }
+  }
+
+  if (vmToMedia) {
+    for (const c of campaigns) {
+      if (c.thumbVm) {
+        const mp = vmToMedia(c.thumbVm);
+        c.thumbUrl = await mediaUrl(mp);
+      }
     }
   }
   if (campaigns.length === 0) throw new Error('캠페인을 찾을 수 없습니다.');
@@ -1235,6 +1399,14 @@ const App = () => {
       const bytes = new Uint8Array(buf);
       const isXlsx = bytes[0] === 0x50 && bytes[1] === 0x4B;
       if (isXlsx) {
+        const zip = await JSZip.loadAsync(buf);
+        if (await isAdListXlsx(zip)) {
+          const list = await parseAdListXlsx(zip);
+          setAdList(list);
+          setAdListName(file.name);
+          if (skus.length > 0) setMode('adtrack');
+          return;
+        }
         const parsedCampaigns = await parseAdPerformance(buf);
         setCampaigns(parsedCampaigns);
         setSkus([]);
@@ -2210,11 +2382,20 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
 };
 
 const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset }) => {
-  const [showPrev, setShowPrev] = useState(false);
   const [periodMode, setPeriodMode] = useState('day');
   const [expanded, setExpanded] = useState(() => new Set());
-  const [sortKey, setSortKey] = useState('totalSales');
+  const [sortKey, setSortKey] = useState('adCount');
   const [sortDir, setSortDir] = useState('desc');
+  const [query, setQuery] = useState('');
+
+  const codeMap = useMemo(() => {
+    const m = new Map();
+    for (const g of groups) {
+      const code = extractProductCode(g.productName);
+      if (code && !m.has(code)) m.set(code, g);
+    }
+    return m;
+  }, [groups]);
 
   const periods = useMemo(() => {
     if (periodMode === 'day') {
@@ -2231,100 +2412,89 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
     return out;
   }, [periodMode, dateLabels]);
 
-  const codeMap = useMemo(() => {
-    const m = new Map();
-    for (const g of groups) {
-      const code = extractProductCode(g.productName);
-      if (code && !m.has(code)) m.set(code, g);
-    }
-    return m;
-  }, [groups]);
-
-  const dailyOf = (g) => {
-    const len = dateLabels.length;
-    const arr = new Array(len).fill(0);
-    for (const sku of g.skus || []) {
-      for (let i = 0; i < len; i++) arr[i] += sku.sales[i] || 0;
-    }
-    return arr;
-  };
-
-  const rows = useMemo(() => {
-    const reportEnd = dateLabels[dateLabels.length - 1] || '';
-    return adList.map(camp => {
-      const postDate = parsePostDate(camp.postCode, reportEnd);
-      const prevIdx = [], postIdx = [];
-      dateLabels.forEach((d, i) => {
-        const dd = new Date(d);
-        if (postDate && !isNaN(dd.getTime()) && dd < postDate) prevIdx.push(i);
-        else postIdx.push(i);
-      });
-      const prods = camp.products.map(p => {
-        const gs = p.codes.map(c => codeMap.get(c)).filter(Boolean);
-        const matched = gs.length > 0;
-        const daily = new Array(dateLabels.length).fill(0);
-        for (const g of gs) {
-          const d = dailyOf(g);
-          for (let i = 0; i < d.length; i++) daily[i] += d[i];
+  const products = useMemo(() => {
+    const pm = new Map();
+    for (const camp of adList) {
+      for (const p of camp.products) {
+        const codes = p.codes && p.codes.length ? p.codes : ['__' + p.raw];
+        for (const code of codes) {
+          if (!pm.has(code)) pm.set(code, { code, adName: p.raw, campaigns: [] });
+          const prod = pm.get(code);
+          if (!prod.campaigns.some(c => c.no === camp.no && c.name === camp.name)) {
+            prod.campaigns.push({
+              no: camp.no, name: camp.name, manager: camp.manager,
+              postCode: camp.postCode, thumbUrl: camp.thumbUrl || null,
+            });
+          }
         }
-        const total = daily.reduce((a, b) => a + b, 0);
-        const prevSum = prevIdx.reduce((a, i) => a + daily[i], 0);
-        const postSum = postIdx.reduce((a, i) => a + daily[i], 0);
-        return {
-          raw: p.raw, codes: p.codes, matched, total, daily,
-          prevAvg: prevIdx.length > 0 ? prevSum / prevIdx.length : null,
-          postAvg: postIdx.length > 0 ? postSum / postIdx.length : null,
-        };
-      });
+      }
+    }
+    const len = dateLabels.length;
+    return [...pm.values()].map(prod => {
+      const realCode = prod.code.startsWith('__') ? '' : prod.code;
+      const g = realCode ? codeMap.get(realCode) : null;
+      let daily = new Array(len).fill(0), total = 0, imageUrl = null;
+      let productName = prod.adName;
+      if (g) {
+        for (const sku of g.skus || []) {
+          for (let i = 0; i < len; i++) daily[i] += sku.sales[i] || 0;
+        }
+        total = daily.reduce((a, b) => a + b, 0);
+        imageUrl = g.imageUrl;
+        productName = g.productName;
+      }
       return {
-        no: camp.no, name: camp.name, manager: camp.manager,
-        postCode: camp.postCode, status: camp.status, postDate,
-        prevDays: prevIdx.length, postDays: postIdx.length,
-        prods,
-        productCount: prods.length,
-        matchedCount: prods.filter(p => p.matched).length,
-        totalSales: prods.reduce((s, p) => s + p.total, 0),
-        prevAvg: prevIdx.length > 0 ? prods.reduce((s, p) => s + (p.prevAvg || 0), 0) : null,
-        postAvg: postIdx.length > 0 ? prods.reduce((s, p) => s + (p.postAvg || 0), 0) : null,
+        code: realCode, adName: prod.adName, productName, imageUrl,
+        matched: !!g, daily, total,
+        campaigns: prod.campaigns.sort((a, b) => (b.postCode || '').localeCompare(a.postCode || '')),
+        adCount: prod.campaigns.length,
       };
     });
-  }, [adList, dateLabels, codeMap]);
+  }, [adList, codeMap, dateLabels]);
 
-  const sortedRows = useMemo(() => {
-    return [...rows].sort((a, b) => {
+  const sortedProducts = useMemo(() => {
+    let list = products;
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      list = list.filter(p =>
+        (p.productName || '').toLowerCase().includes(q) ||
+        (p.code || '').toLowerCase().includes(q) ||
+        (p.adName || '').toLowerCase().includes(q)
+      );
+    }
+    return [...list].sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];
       let cmp;
       if (typeof av === 'string') cmp = String(av).localeCompare(String(bv));
       else cmp = (av || 0) - (bv || 0);
       return sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [rows, sortKey, sortDir]);
+  }, [products, sortKey, sortDir, query]);
 
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(k); setSortDir('desc'); }
   };
-  const toggleExpand = (no) => {
+  const toggleExpand = (code) => {
     setExpanded(prev => {
       const next = new Set(prev);
-      if (next.has(no)) next.delete(no); else next.add(no);
+      if (next.has(code)) next.delete(code); else next.add(code);
       return next;
     });
   };
 
   const period = dateLabels.length ? `${dateLabels[0]} ~ ${dateLabels[dateLabels.length - 1]}` : '';
   const fmtPost = (pc) => pc ? `${pc.slice(0, 2)}/${pc.slice(2)}` : '-';
-  const fmtAvg = (v) => v == null ? '—' : v.toFixed(1);
-  const totalMatched = rows.reduce((s, c) => s + c.matchedCount, 0);
-  const totalProds = rows.reduce((s, c) => s + c.productCount, 0);
+  const matchedCount = products.filter(p => p.matched).length;
+  const hasThumb = adList.some(c => c.thumbUrl);
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-2xl font-medium tracking-tight">광고-판매 추적</h2>
+          <h2 className="text-2xl font-medium tracking-tight">광고-판매 추적 · 상품별</h2>
           <p className="text-xs text-stone-500 mt-1">
-            광고 {adListName} · 매출 {fileName} · 기간 {period} · 캠페인 {rows.length}개 · 매칭 {totalMatched}/{totalProds}
+            광고 {adListName} · 매출 {fileName} · 기간 {period} · 상품 {products.length}개 (매출매칭 {matchedCount})
           </p>
         </div>
         <button
@@ -2335,17 +2505,28 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
         </button>
       </div>
 
+      {!hasThumb && (
+        <div className="bg-cream-200 border border-cream-400 px-4 py-2.5 text-xs text-stone-600">
+          광고리스트가 CSV라 광고 이미지가 없어요. 이미지를 보려면 <span className="font-medium">.xlsx 광고리스트</span>로 올려주세요.
+        </div>
+      )}
+
       <div className="flex items-center gap-3 bg-cream-50 border border-cream-400 px-4 py-3 flex-wrap">
-        <button
-          onClick={() => setShowPrev(v => !v)}
-          className={`px-3 py-1.5 text-sm border transition ${
-            showPrev
-              ? 'bg-stone-900 text-cream-50 border-stone-900'
-              : 'bg-cream-50 text-stone-700 border-cream-400 hover:border-stone-700'
-          }`}
-        >
-          게시 전 비교 {showPrev ? 'ON' : 'OFF'}
-        </button>
+        <div className="flex items-center gap-1.5 bg-cream-100 px-2.5 py-1.5 border border-cream-400">
+          <LucideSearch size={13} className="text-stone-500" />
+          <input
+            type="text"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="상품명·코드 검색"
+            className="text-sm bg-transparent focus:outline-none w-40 placeholder:text-stone-400"
+          />
+          {query && (
+            <button onClick={() => setQuery('')} className="text-stone-400 hover:text-stone-700">
+              <LucideX size={13} />
+            </button>
+          )}
+        </div>
         <div className="flex items-center border border-cream-400">
           <span className="px-2 text-xs text-stone-500">기간 단위</span>
           {[['day', '일별'], ['week', '주별']].map(([v, label]) => (
@@ -2353,17 +2534,15 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
               key={v}
               onClick={() => setPeriodMode(v)}
               className={`px-3 py-1.5 text-sm transition ${
-                periodMode === v
-                  ? 'bg-stone-900 text-cream-50'
-                  : 'bg-cream-50 text-stone-700 hover:bg-cream-200'
+                periodMode === v ? 'bg-stone-900 text-cream-50' : 'bg-cream-50 text-stone-700 hover:bg-cream-200'
               }`}
             >
               {label}
             </button>
           ))}
         </div>
-        <span className="text-xs text-stone-500 leading-relaxed">
-          캠페인을 펼치면 상품별 {periodMode === 'day' ? '일별' : '주별'} 판매량이 표시됩니다. 게시일 이후 구간은 음영으로 강조돼요.
+        <span className="text-xs text-stone-500">
+          상품 행을 클릭하면 광고에 쓰인 이미지들과 기간별 판매가 펼쳐집니다.
         </span>
       </div>
 
@@ -2372,92 +2551,122 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
           <thead className="bg-cream-200 text-stone-600">
             <tr>
               <th className="px-3 py-2 text-left font-medium whitespace-nowrap">#</th>
-              <th onClick={() => toggleSort('name')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
-                캠페인명{sortKey === 'name' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">이미지</th>
+              <th onClick={() => toggleSort('productName')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
+                상품명{sortKey === 'productName' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
               </th>
-              <th onClick={() => toggleSort('manager')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">담당자</th>
-              <th onClick={() => toggleSort('postCode')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">게시일</th>
-              <th onClick={() => toggleSort('productCount')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">상품수</th>
-              <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매칭</th>
-              <th onClick={() => toggleSort('totalSales')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
-                기간 판매{sortKey === 'totalSales' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+              <th onClick={() => toggleSort('code')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">코드</th>
+              <th onClick={() => toggleSort('adCount')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
+                광고 횟수{sortKey === 'adCount' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
               </th>
-              {showPrev && (
-                <th onClick={() => toggleSort('prevAvg')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">게시전 일평균</th>
-              )}
-              {showPrev && (
-                <th onClick={() => toggleSort('postAvg')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">게시후 일평균</th>
-              )}
+              <th onClick={() => toggleSort('total')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
+                기간 판매{sortKey === 'total' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+              </th>
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map((c, i) => {
-              const isOpen = expanded.has(c.no);
+            {sortedProducts.map((p, i) => {
+              const isOpen = expanded.has(p.code || p.adName);
+              const key = p.code || p.adName;
               return (
-                <React.Fragment key={c.no + i}>
+                <React.Fragment key={key + i}>
                   <tr
                     className="border-t border-cream-300 hover:bg-cream-100 cursor-pointer"
-                    onClick={() => toggleExpand(c.no)}
+                    onClick={() => toggleExpand(key)}
                   >
                     <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
-                    <td className="px-3 py-2 whitespace-nowrap max-w-[280px] truncate" title={c.name}>
-                      <span className="text-stone-400 mr-1">{isOpen ? '▾' : '▸'}</span>{c.name}
+                    <td className="px-3 py-2">
+                      <div className="w-12 h-12 bg-cream-200 border border-cream-400 overflow-hidden flex items-center justify-center">
+                        {p.imageUrl && p.imageUrl !== '이미지없음' ? (
+                          <img src={p.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
+                        ) : (
+                          <span className="text-[10px] text-stone-400">없음</span>
+                        )}
+                      </div>
                     </td>
-                    <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{c.manager}</td>
-                    <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{fmtPost(c.postCode)}</td>
-                    <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.productCount}</td>
-                    <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.matchedCount}/{c.productCount}</td>
-                    <td className="px-3 py-2 text-right font-medium whitespace-nowrap">{c.totalSales.toLocaleString()}</td>
-                    {showPrev && <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{fmtAvg(c.prevAvg)}</td>}
-                    {showPrev && <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{fmtAvg(c.postAvg)}</td>}
+                    <td className="px-3 py-2 whitespace-nowrap max-w-[340px] truncate" title={p.productName}>
+                      <span className="text-stone-400 mr-1">{isOpen ? '▾' : '▸'}</span>
+                      {p.productName}
+                      {!p.matched && <span className="text-rose-600 text-xs ml-1">(매출 미매칭)</span>}
+                    </td>
+                    <td className="px-3 py-2 text-stone-500 whitespace-nowrap">{p.code || '-'}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <span className="inline-flex items-center justify-center min-w-[1.6rem] px-1.5 py-0.5 bg-stone-900 text-cream-50 text-xs font-medium">
+                        {p.adCount}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right font-medium whitespace-nowrap">
+                      {p.matched ? p.total.toLocaleString() : '—'}
+                    </td>
                   </tr>
                   {isOpen && (
                     <tr className="border-t border-cream-300">
-                      <td colSpan={showPrev ? 9 : 7} className="p-0 bg-cream-100">
-                        <div className="px-6 py-3 overflow-x-auto">
-                          <div className="text-xs font-medium text-stone-600 mb-2">
-                            {c.name} · 상품 {c.productCount}개 · 게시 {fmtPost(c.postCode)} · {periodMode === 'day' ? '일별' : '주별'} 판매
-                            <span className="text-stone-400 font-normal"> (음영 = 게시일 이후 구간)</span>
-                          </div>
-                          <table className="text-xs">
-                            <thead className="text-stone-500">
-                              <tr>
-                                <th className="px-2 py-1.5 text-left font-medium sticky left-0 bg-cream-100 z-10">상품</th>
-                                <th className="px-2 py-1.5 text-left font-medium whitespace-nowrap">코드</th>
-                                {periods.map((pd, idx) => {
-                                  const isPost = c.postDate && new Date(pd.start) >= c.postDate;
-                                  return (
-                                    <th key={idx} className={`px-2 py-1.5 text-right font-medium whitespace-nowrap ${isPost ? 'bg-cream-400 text-stone-800' : ''}`}>
-                                      {pd.label}
-                                    </th>
-                                  );
-                                })}
-                                <th className="px-2 py-1.5 text-right font-medium">합계</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {c.prods.map((p, pi) => (
-                                <tr key={pi} className="border-t border-cream-300">
-                                  <td className="px-2 py-1.5 text-stone-700 whitespace-nowrap sticky left-0 bg-cream-100 z-10">{p.raw}</td>
-                                  <td className="px-2 py-1.5 text-stone-500 whitespace-nowrap">
-                                    {p.matched ? p.codes.join(', ') : <span className="text-rose-600">미매칭</span>}
-                                  </td>
-                                  {periods.map((pd, idx) => {
-                                    const isPost = c.postDate && new Date(pd.start) >= c.postDate;
-                                    const v = p.matched ? pd.idx.reduce((a, di) => a + (p.daily[di] || 0), 0) : null;
-                                    return (
-                                      <td key={idx} className={`px-2 py-1.5 text-right whitespace-nowrap ${isPost ? 'bg-cream-300' : ''} ${v ? 'text-stone-700' : 'text-stone-400'}`}>
-                                        {v == null ? '—' : v}
-                                      </td>
-                                    );
-                                  })}
-                                  <td className="px-2 py-1.5 text-right font-medium text-stone-700 whitespace-nowrap">
-                                    {p.matched ? p.total.toLocaleString() : '—'}
-                                  </td>
-                                </tr>
+                      <td colSpan={6} className="p-0 bg-cream-100">
+                        <div className="px-6 py-4 space-y-4">
+                          <div>
+                            <div className="text-xs font-medium text-stone-600 mb-2">
+                              이 상품이 들어간 광고 {p.campaigns.length}개 — 광고별 사용 이미지
+                            </div>
+                            <div className="flex flex-wrap gap-3">
+                              {p.campaigns.map((c, ci) => (
+                                <div key={ci} className="w-40 border border-cream-400 bg-cream-50">
+                                  <div className="w-full h-40 bg-cream-200 overflow-hidden flex items-center justify-center">
+                                    {c.thumbUrl ? (
+                                      <img src={c.thumbUrl} alt="" className="w-full h-full object-cover" />
+                                    ) : (
+                                      <span className="text-xs text-stone-400">이미지 없음</span>
+                                    )}
+                                  </div>
+                                  <div className="px-2 py-1.5">
+                                    <div className="text-xs font-medium text-stone-700 truncate" title={c.name}>{c.name}</div>
+                                    <div className="text-[11px] text-stone-500 mt-0.5">게시 {fmtPost(c.postCode)} · {c.manager}</div>
+                                  </div>
+                                </div>
                               ))}
-                            </tbody>
-                          </table>
+                            </div>
+                          </div>
+                          {p.matched ? (
+                            <div className="overflow-x-auto">
+                              <div className="text-xs font-medium text-stone-600 mb-2">
+                                {periodMode === 'day' ? '일별' : '주별'} 판매량
+                                <span className="text-stone-400 font-normal"> (▲ = 광고 게시일)</span>
+                              </div>
+                              <table className="text-xs">
+                                <thead className="text-stone-500">
+                                  <tr>
+                                    {periods.map((pd, idx) => {
+                                      const marker = p.campaigns.some(c => {
+                                        if (!c.postCode) return false;
+                                        const md = c.postCode.slice(0, 2) + '/' + c.postCode.slice(2);
+                                        return pd.idx.some(di => dateLabels[di].slice(5).replace('-', '/') === md);
+                                      });
+                                      return (
+                                        <th key={idx} className="px-2 py-1.5 text-right font-medium whitespace-nowrap">
+                                          {marker ? <span className="text-stone-900">▲ </span> : ''}{pd.label}
+                                        </th>
+                                      );
+                                    })}
+                                    <th className="px-2 py-1.5 text-right font-medium">합계</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <tr className="border-t border-cream-300">
+                                    {periods.map((pd, idx) => {
+                                      const v = pd.idx.reduce((a, di) => a + (p.daily[di] || 0), 0);
+                                      return (
+                                        <td key={idx} className={`px-2 py-1.5 text-right whitespace-nowrap ${v ? 'text-stone-700' : 'text-stone-400'}`}>
+                                          {v}
+                                        </td>
+                                      );
+                                    })}
+                                    <td className="px-2 py-1.5 text-right font-medium text-stone-700">{p.total.toLocaleString()}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <div className="text-xs text-stone-500">매출 파일에 이 코드({p.code || '코드 없음'})의 상품이 없어 판매량을 표시할 수 없어요.</div>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -2470,13 +2679,13 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
       </div>
 
       <p className="text-xs text-stone-500 leading-relaxed">
-        광고리스트의 상품과 매출 파일을 상품코드(영문+숫자)로 매칭했어요. '미매칭'은 매출 파일에 같은 코드의 상품이 없는 경우입니다.
-        캠페인을 펼치면 상품별 일별/주별 판매량이 나오고, 게시일 이후 구간은 음영으로 표시됩니다.
-        '게시 전 비교'를 켜면 캠페인 행에 게시 전·후 일평균 판매가 함께 표시됩니다.
+        광고리스트의 상품과 매출 파일을 상품코드(영문+숫자)로 매칭했어요. '광고 횟수'는 그 상품이 들어간 캠페인 수입니다.
+        상품을 펼치면 광고마다 사용한 이미지를 나란히 비교할 수 있고, 기간별 판매량에 광고 게시일이 ▲로 표시됩니다.
       </p>
     </div>
   );
 };
+
 
 const Panel = ({ title, icon: Icon, children }) => (
   <div className="bg-cream-50 border border-cream-400">

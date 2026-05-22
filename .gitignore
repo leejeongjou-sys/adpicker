@@ -5,3 +5,6 @@ dist-ssr
 .env.local
 .DS_Store
 *.log
+*.xlsx
+*.xls
+*.csv
