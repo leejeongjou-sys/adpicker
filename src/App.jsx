@@ -2444,11 +2444,28 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
         imageUrl = g.imageUrl;
         productName = g.productName;
       }
+      const sortedCamps = prod.campaigns
+        .slice()
+        .sort((a, b) => (b.postCode || '').localeCompare(a.postCode || ''));
+      const campWithEffect = sortedCamps.map(c => {
+        let nextDaySales = null;
+        if (g && c.postCode) {
+          const md = c.postCode.slice(0, 2) + '/' + c.postCode.slice(2);
+          const pi = dateLabels.findIndex(d => d.slice(5).replace('-', '/') === md);
+          if (pi >= 0 && pi + 1 < len) nextDaySales = daily[pi + 1];
+        }
+        return { ...c, nextDaySales };
+      });
+      const validNext = campWithEffect.filter(c => c.nextDaySales != null).map(c => c.nextDaySales);
+      const maxNext = validNext.length ? Math.max(...validNext) : 0;
+      campWithEffect.forEach(c => {
+        c.isBest = c.nextDaySales != null && c.nextDaySales === maxNext && maxNext > 0;
+      });
       return {
         code: realCode, adName: prod.adName, productName, imageUrl,
         matched: !!g, daily, total,
-        campaigns: prod.campaigns.sort((a, b) => (b.postCode || '').localeCompare(a.postCode || '')),
-        adCount: prod.campaigns.length,
+        campaigns: campWithEffect,
+        adCount: campWithEffect.length,
       };
     });
   }, [adList, codeMap, dateLabels]);
@@ -2607,20 +2624,32 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
                           <div>
                             <div className="text-xs font-medium text-stone-600 mb-2">
                               이 상품이 들어간 광고 {p.campaigns.length}개 — 광고별 사용 이미지
+                              <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 게시 다음날 판매가 가장 높았던 광고)</span>
                             </div>
                             <div className="flex flex-wrap gap-3">
                               {p.campaigns.map((c, ci) => (
-                                <div key={ci} className="w-40 border border-cream-400 bg-cream-50">
-                                  <div className="w-full h-40 bg-cream-200 overflow-hidden flex items-center justify-center">
+                                <div
+                                  key={ci}
+                                  className={`w-40 bg-cream-50 ${c.isBest ? 'border-4 border-stone-900' : 'border border-cream-400'}`}
+                                >
+                                  <div className="w-full h-40 bg-cream-200 overflow-hidden flex items-center justify-center relative">
                                     {c.thumbUrl ? (
                                       <img src={c.thumbUrl} alt="" className="w-full h-full object-cover" />
                                     ) : (
                                       <span className="text-xs text-stone-400">이미지 없음</span>
                                     )}
+                                    {c.isBest && (
+                                      <span className="absolute top-0 left-0 bg-stone-900 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">
+                                        BEST
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="px-2 py-1.5">
                                     <div className="text-xs font-medium text-stone-700 truncate" title={c.name}>{c.name}</div>
                                     <div className="text-[11px] text-stone-500 mt-0.5">게시 {fmtPost(c.postCode)} · {c.manager}</div>
+                                    <div className={`text-[11px] mt-0.5 ${c.isBest ? 'text-stone-900 font-medium' : 'text-stone-500'}`}>
+                                      게시 다음날 판매 {c.nextDaySales == null ? '—' : c.nextDaySales}
+                                    </div>
                                   </div>
                                 </div>
                               ))}
