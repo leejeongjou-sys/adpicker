@@ -3,7 +3,7 @@ import {
   LucideUpload, LucideFileSpreadsheet, LucideDownload, LucideSparkles,
   LucideTrendingUp, LucideTrendingDown, LucideStar, LucideCalendar, LucideShirt, LucideTag,
   LucidePackage, LucideAlertCircle, LucideX, LucideImage, LucideBox, LucideArchive, LucideAward,
-  LucideMessageSquare, LucideKey, LucideLoader2
+  LucideMessageSquare, LucideKey, LucideLoader2, LucideCalendarCheck, LucideRocket, LucideSearch
 } from 'lucide-react';
 import ExcelJS from 'exceljs';
 
@@ -14,6 +14,8 @@ const THEMES = [
   { id: 'brand', label: '브랜드별 베스트', desc: '상품명 prefix 코드로 분류', icon: LucideTag, modes: ['xls', 'csv'] },
   { id: 'category', label: '카테고리별 베스트', desc: '카테고리 선택 → Top 8', icon: LucideShirt, modes: ['xls', 'csv'] },
   { id: 'steady', label: '스테디셀러', desc: '오래됐지만 꾸준한 상품', icon: LucidePackage, modes: ['xls', 'csv'] },
+  { id: 'frequency', label: '판매 빈도', desc: '8일 중 판매일수 많은 안정 상품', icon: LucideCalendarCheck, modes: ['xls'] },
+  { id: 'earlyTraction', label: '얼리 트랙션', desc: '등록 대비 판매 속도 빠른 신상', icon: LucideRocket, modes: ['xls', 'csv'] },
   { id: 'rising', label: '급상승(라이징)', desc: '후반 4일 vs 전반 4일 증가율', icon: LucideTrendingUp, modes: ['xls'] },
   { id: 'overstock', label: '재고 과다', desc: '재고 많고 안 팔리는 상품 (재고 소진용)', icon: LucideArchive, modes: ['xls'] },
   { id: 'declining', label: '판매 감소', desc: '후반에 판매가 떨어진 상품 (재활성용)', icon: LucideTrendingDown, modes: ['xls'] },
@@ -293,6 +295,13 @@ const groupByProduct = (skus) => {
     g.cancelRate = g.totalSales > 0 ? g.totalCanceled / g.totalSales : 0;
     const numDays = g.skus[0]?.sales.length || 1;
     g.avgDaily = g.totalSales / numDays;
+    let salesDays = 0;
+    for (let i = 0; i < numDays; i++) {
+      let s = 0;
+      for (const sku of g.skus) s += sku.sales[i] || 0;
+      if (s > 0) salesDays++;
+    }
+    g.salesDays = salesDays;
   }
   return enrichPackageSeasons(Array.from(map.values()));
 };
@@ -342,6 +351,19 @@ const computeScore = (theme, opts, group) => {
       if (avgDaily < (opts.minAvgDaily ?? 1)) return -1;
       return avgDaily * Math.log(1 + months / 12);
     }
+    case 'frequency': {
+      if (group.totalSales < (opts.minSales ?? 2)) return -1;
+      if ((group.salesDays ?? 0) < (opts.minSalesDays ?? 3)) return -1;
+      return group.salesDays * Math.log(1 + group.totalSales);
+    }
+    case 'earlyTraction': {
+      const months = monthsBetween(group.registDate);
+      const cutoff = opts.tractionMonths ?? 6;
+      if (months > cutoff) return -1;
+      const avgDaily = group.avgDaily ?? 0;
+      if (avgDaily <= 0) return -1;
+      return avgDaily * (1 + (cutoff - months) / cutoff);
+    }
     default:
       return group.totalSales;
   }
@@ -364,6 +386,10 @@ const filterByTheme = (theme, opts, groups) => {
   const skipStock = theme === 'package' || opts._mode === 'csv';
   if (opts.minCurrentStock > 0 && !skipStock) {
     list = list.filter(g => g.totalCurrentStock >= opts.minCurrentStock);
+  }
+  if (opts.searchQuery?.trim()) {
+    const q = opts.searchQuery.trim().toLowerCase();
+    list = list.filter(g => g.productName.toLowerCase().includes(q));
   }
   return list;
 };
@@ -402,6 +428,10 @@ const pickRecommendation = (groups, opts) => {
     : groups;
   if (opts.minCurrentStock > 0 && opts._mode !== 'csv') {
     seasonFiltered = seasonFiltered.filter(g => g.totalCurrentStock >= opts.minCurrentStock);
+  }
+  if (opts.searchQuery?.trim()) {
+    const q = opts.searchQuery.trim().toLowerCase();
+    seasonFiltered = seasonFiltered.filter(g => g.productName.toLowerCase().includes(q));
   }
 
   const picks = [];
@@ -854,6 +884,9 @@ const App = () => {
     minStock: 30,
     maxSales: 10,
     minCurrentStock: 5,
+    minSalesDays: 3,
+    tractionMonths: 6,
+    searchQuery: '',
     seasonFilters: [],
     useDiversity: true,
     maxPerCategory: 3,
@@ -1022,6 +1055,24 @@ const App = () => {
           </div>
           {fileName && (
             <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-1.5 bg-cream-50 px-3 py-1.5 border border-cream-400">
+                <LucideSearch size={13} className="text-stone-500" />
+                <input
+                  type="text"
+                  value={opts.searchQuery}
+                  onChange={e => setOpts({ ...opts, searchQuery: e.target.value })}
+                  placeholder="상품명 검색"
+                  className="text-sm bg-transparent focus:outline-none w-36 placeholder:text-stone-400"
+                />
+                {opts.searchQuery && (
+                  <button
+                    onClick={() => setOpts({ ...opts, searchQuery: '' })}
+                    className="text-stone-400 hover:text-stone-700"
+                  >
+                    <LucideX size={13} />
+                  </button>
+                )}
+              </div>
               <div className="flex items-center gap-1.5 bg-cream-50 px-3 py-1.5 border border-cream-400">
                 <label className="text-xs font-medium text-stone-600 mr-1">시즌</label>
                 {SEASON_VALUES.map(v => {
@@ -1580,6 +1631,48 @@ const ThemeOptions = ({
           className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
         />
         <span className="text-xs text-stone-500 ml-1">개 이상</span>
+      </div>
+    );
+  }
+  if (theme === 'frequency') {
+    return (
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs text-stone-600 block mb-1">최소 판매일수 (8일 중)</label>
+          <input
+            type="number"
+            min="1"
+            max="8"
+            value={opts.minSalesDays}
+            onChange={e => set('minSalesDays', parseInt(e.target.value) || 3)}
+            className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
+          />
+          <span className="text-xs text-stone-500 ml-1">일 이상</span>
+        </div>
+        <p className="text-xs text-stone-500 leading-relaxed">
+          점수 = 판매일수 × log(1 + 총판매). 며칠 내내 꾸준히 팔린 상품일수록 상위 → 광고 ROAS 예측이 안정적.
+        </p>
+      </div>
+    );
+  }
+  if (theme === 'earlyTraction') {
+    return (
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs text-stone-600 block mb-1">신상 기준 (최근 N개월 등록)</label>
+          <input
+            type="number"
+            min="1"
+            max="24"
+            value={opts.tractionMonths}
+            onChange={e => set('tractionMonths', parseInt(e.target.value) || 6)}
+            className="w-24 px-2 py-1 text-sm border border-cream-400 bg-cream-50"
+          />
+          <span className="text-xs text-stone-500 ml-1">개월 이내</span>
+        </div>
+        <p className="text-xs text-stone-500 leading-relaxed">
+          점수 = 일평균 판매속도 × 신상 가중치. 등록한 지 얼마 안 됐는데 빠르게 팔리는 상품 → 광고로 키울 잠재력이 큼.
+        </p>
       </div>
     );
   }
