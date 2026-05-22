@@ -285,6 +285,124 @@ const parsePostDate = (postCode, reportEnd) => {
   return d;
 };
 
+const splitProductId = (raw) => {
+  const s = adText(raw);
+  const idx = s.indexOf(',');
+  if (idx < 0) return { id: s, name: s };
+  return { id: s.slice(0, idx).trim(), name: s.slice(idx + 1).trim() };
+};
+
+const parseAdRawByProduct = (ws, headers) => {
+  const findCol = (pred) => headers.findIndex(h => h && pred(h));
+  const col = {
+    name: findCol(h => h.includes('광고 이름')),
+    product: findCol(h => h.includes('제품 ID')),
+    roas: findCol(h => h.toUpperCase().includes('ROAS')),
+    spend: findCol(h => h.includes('지출')),
+    purchases: findCol(h => h.trim() === '구매'),
+    clicks: findCol(h => h.includes('링크 클릭')),
+    impressions: findCol(h => h.trim() === '노출'),
+    body: findCol(h => h.includes('본문')),
+    start: findCol(h => h.includes('보고 시작')),
+    end: findCol(h => h.includes('보고 종료')),
+  };
+  if (col.name < 0 || col.product < 0) {
+    throw new Error('광고 이름·제품 ID 컬럼을 찾을 수 없습니다.');
+  }
+
+  const lastRow = ws.rowCount || ws.actualRowCount || 1;
+  const campMap = new Map();
+  let minStart = '', maxEnd = '';
+
+  for (let r = 2; r <= lastRow; r++) {
+    const row = ws.getRow(r);
+    const cell = (i) => i >= 0 ? row.getCell(i + 1).value : null;
+    const name = adText(cell(col.name));
+    if (!name) continue;
+    const start = adText(cell(col.start));
+    const end = adText(cell(col.end));
+    if (start && (!minStart || start < minStart)) minStart = start;
+    if (end && (!maxEnd || end > maxEnd)) maxEnd = end;
+
+    if (!campMap.has(name)) {
+      campMap.set(name, {
+        name, products: new Map(),
+        spend: 0, impressions: 0, clicks: 0, revenue: 0, purchases: 0, body: '',
+      });
+    }
+    const camp = campMap.get(name);
+    const spend = adNum(cell(col.spend));
+    const impressions = adNum(cell(col.impressions));
+    const clicks = adNum(cell(col.clicks));
+    const roas = adNum(cell(col.roas));
+    const purchases = adNum(cell(col.purchases));
+    camp.spend += spend;
+    camp.impressions += impressions;
+    camp.clicks += clicks;
+    camp.revenue += roas * spend;
+    camp.purchases += purchases;
+    if (!camp.body && col.body >= 0) camp.body = adText(cell(col.body));
+
+    const { id, name: pname } = splitProductId(cell(col.product));
+    const key = id || pname;
+    if (!camp.products.has(key)) {
+      camp.products.set(key, {
+        productId: id, productName: pname,
+        spend: 0, impressions: 0, clicks: 0, revenue: 0, purchases: 0,
+      });
+    }
+    const p = camp.products.get(key);
+    p.spend += spend;
+    p.impressions += impressions;
+    p.clicks += clicks;
+    p.revenue += roas * spend;
+    p.purchases += purchases;
+  }
+
+  const endD = maxEnd ? new Date(maxEnd) : new Date();
+  const campaigns = [];
+  for (const camp of campMap.values()) {
+    const products = [...camp.products.values()].map(p => ({
+      ...p,
+      ctr: p.impressions > 0 ? p.clicks / p.impressions : 0,
+      cpc: p.clicks > 0 ? p.spend / p.clicks : 0,
+      roas: p.spend > 0 ? p.revenue / p.spend : 0,
+    })).sort((a, b) => b.spend - a.spend);
+
+    const dateM = camp.name.match(/\((\d{3,4})\)\s*$/);
+    const postCode = dateM ? dateM[1].padStart(4, '0') : '';
+    const postDate = parsePostDate(postCode, maxEnd);
+    const ageDays = postDate && !isNaN(endD.getTime())
+      ? Math.max(0, Math.round((endD.getTime() - postDate.getTime()) / 86400000))
+      : null;
+
+    campaigns.push({
+      name: camp.name,
+      manager: (camp.name.split('_')[0] || '-').trim(),
+      postCode, ageDays, ageGroup: ageGroupOf(ageDays),
+      status: '',
+      budget: 0,
+      spend: camp.spend,
+      revenue: camp.revenue,
+      roas: camp.spend > 0 ? camp.revenue / camp.spend : 0,
+      purchases: camp.purchases,
+      carts: 0,
+      impressions: camp.impressions,
+      clicks: camp.clicks,
+      ctr: camp.impressions > 0 ? camp.clicks / camp.impressions : 0,
+      cpc: camp.clicks > 0 ? camp.spend / camp.clicks : 0,
+      cpm: camp.impressions > 0 ? (camp.spend / camp.impressions) * 1000 : 0,
+      reportStart: minStart,
+      reportEnd: maxEnd,
+      body: camp.body,
+      products,
+      productCount: products.length,
+    });
+  }
+  if (campaigns.length === 0) throw new Error('캠페인 데이터가 없습니다.');
+  return campaigns;
+};
+
 const parseAdPerformance = async (buf) => {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buf);
@@ -295,6 +413,10 @@ const parseAdPerformance = async (buf) => {
   const headerRow = ws.getRow(1);
   const colCount = ws.columnCount || ws.actualColumnCount || 13;
   for (let c = 1; c <= colCount; c++) headers.push(adText(headerRow.getCell(c).value));
+
+  if (headers.some(h => h && h.includes('제품 ID'))) {
+    return parseAdRawByProduct(ws, headers);
+  }
 
   const findCol = (pred) => headers.findIndex(h => h && pred(h));
   const col = {
@@ -1564,11 +1686,31 @@ const fmtWon0 = (n) => Math.round(n || 0).toLocaleString();
 const fmtPct1 = (n) => `${((n || 0) * 100).toFixed(1)}%`;
 
 const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
-  const [sortKey, setSortKey] = useState('roas');
+  const isProductMode = campaigns.length > 0 && Array.isArray(campaigns[0].products);
+  const [sortKey, setSortKey] = useState(isProductMode ? 'spend' : 'roas');
   const [sortDir, setSortDir] = useState('desc');
   const [targetRoas, setTargetRoas] = useState(3);
   const [statusFilter, setStatusFilter] = useState('all');
   const [ageFilter, setAgeFilter] = useState('all');
+  const [expanded, setExpanded] = useState(() => new Set());
+
+  const totals = useMemo(() => {
+    const sum = (k) => campaigns.reduce((s, c) => s + (c[k] || 0), 0);
+    const spend = sum('spend'), revenue = sum('revenue');
+    const impressions = sum('impressions'), clicks = sum('clicks');
+    const carts = sum('carts'), purchases = sum('purchases');
+    return {
+      spend, revenue, impressions, clicks, carts, purchases,
+      roas: spend > 0 ? revenue / spend : 0,
+      ctr: impressions > 0 ? clicks / impressions : 0,
+      buyRate: carts > 0 ? purchases / carts : 0,
+    };
+  }, [campaigns]);
+
+  const totalProducts = useMemo(
+    () => campaigns.reduce((s, c) => s + (c.productCount || 0), 0),
+    [campaigns]
+  );
 
   const ageStats = useMemo(() => {
     const ids = [...AGE_GROUPS.map(g => g.id), '미상'];
@@ -1580,30 +1722,12 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
       const clicks = list.reduce((s, c) => s + c.clicks, 0);
       const meta = AGE_GROUPS.find(g => g.id === id);
       return {
-        id,
-        range: meta ? meta.range : '게시일 미상',
-        count: list.length,
-        spend,
-        revenue,
+        id, range: meta ? meta.range : '게시일 미상',
+        count: list.length, spend, revenue, clicks, impressions,
         roas: spend > 0 ? revenue / spend : 0,
         ctr: impressions > 0 ? clicks / impressions : 0,
       };
     }).filter(s => s.count > 0);
-  }, [campaigns]);
-
-  const totals = useMemo(() => {
-    const spend = campaigns.reduce((s, c) => s + c.spend, 0);
-    const revenue = campaigns.reduce((s, c) => s + c.revenue, 0);
-    const purchases = campaigns.reduce((s, c) => s + c.purchases, 0);
-    const carts = campaigns.reduce((s, c) => s + c.carts, 0);
-    const impressions = campaigns.reduce((s, c) => s + c.impressions, 0);
-    const clicks = campaigns.reduce((s, c) => s + c.clicks, 0);
-    return {
-      spend, revenue, purchases, carts,
-      roas: spend > 0 ? revenue / spend : 0,
-      buyRate: carts > 0 ? purchases / carts : 0,
-      ctr: impressions > 0 ? clicks / impressions : 0,
-    };
   }, [campaigns]);
 
   const statuses = useMemo(
@@ -1629,39 +1753,69 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
     else { setSortKey(key); setSortDir('desc'); }
   };
 
+  const toggleExpand = (name) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
   const period = campaigns[0] ? `${campaigns[0].reportStart} ~ ${campaigns[0].reportEnd}` : '';
   const belowCount = campaigns.filter(c => c.spend > 0 && c.roas < targetRoas).length;
 
   const fresh = ageStats.find(s => s.id === '신규');
   const old = ageStats.find(s => s.id === '노후');
   let fatigueMsg = '';
-  if (fresh && old && fresh.roas > 0) {
-    if (old.roas < fresh.roas * 0.8) {
-      fatigueMsg = `노후 캠페인 ROAS(${old.roas.toFixed(2)})가 신규(${fresh.roas.toFixed(2)}) 대비 낮습니다 — 광고 피로 신호. 오래된 캠페인의 소재 교체를 검토하세요.`;
-    } else if (old.roas >= fresh.roas) {
-      fatigueMsg = `노후 캠페인 ROAS(${old.roas.toFixed(2)})가 신규(${fresh.roas.toFixed(2)}) 이상으로 유지되고 있습니다 — 검증된 캠페인은 계속 운영해도 좋습니다.`;
-    } else {
-      fatigueMsg = `노후 캠페인 ROAS(${old.roas.toFixed(2)})가 신규(${fresh.roas.toFixed(2)})보다 다소 낮습니다 — 추이를 지켜보세요.`;
+  if (fresh && old) {
+    if (isProductMode) {
+      if (fresh.ctr > 0 && old.ctr < fresh.ctr * 0.8) {
+        fatigueMsg = `노후 캠페인 CTR(${fmtPct1(old.ctr)})이 신규(${fmtPct1(fresh.ctr)}) 대비 낮습니다 — 광고 피로 신호. 소재 교체를 검토하세요.`;
+      } else {
+        fatigueMsg = `노후 캠페인 CTR(${fmtPct1(old.ctr)})이 신규(${fmtPct1(fresh.ctr)}) 대비 잘 유지되고 있습니다.`;
+      }
+    } else if (fresh.roas > 0) {
+      if (old.roas < fresh.roas * 0.8) {
+        fatigueMsg = `노후 캠페인 ROAS(${old.roas.toFixed(2)})가 신규(${fresh.roas.toFixed(2)}) 대비 낮습니다 — 광고 피로 신호. 오래된 캠페인의 소재 교체를 검토하세요.`;
+      } else if (old.roas >= fresh.roas) {
+        fatigueMsg = `노후 캠페인 ROAS(${old.roas.toFixed(2)})가 신규(${fresh.roas.toFixed(2)}) 이상으로 유지되고 있습니다 — 검증된 캠페인은 계속 운영해도 좋습니다.`;
+      } else {
+        fatigueMsg = `노후 캠페인 ROAS(${old.roas.toFixed(2)})가 신규(${fresh.roas.toFixed(2)})보다 다소 낮습니다 — 추이를 지켜보세요.`;
+      }
     }
   }
 
-  const cols = [
-    { key: 'name', label: '캠페인명', align: 'left' },
-    { key: 'manager', label: '담당자', align: 'left' },
-    { key: 'postCode', label: '게시', align: 'left' },
-    { key: 'ageDays', label: '경과일', align: 'right' },
-    { key: 'ageGroup', label: '나이', align: 'left' },
-    { key: 'status', label: '상태', align: 'left' },
-    { key: 'spend', label: '지출', align: 'right' },
-    { key: 'revenue', label: '매출', align: 'right' },
-    { key: 'roas', label: 'ROAS', align: 'right' },
-    { key: 'purchases', label: '구매', align: 'right' },
-    { key: 'carts', label: '장바구니', align: 'right' },
-    { key: 'buyRate', label: '구매전환', align: 'right' },
-    { key: 'cpc', label: 'CPC', align: 'right' },
-    { key: 'impressions', label: '노출(역산)', align: 'right' },
-    { key: 'ctr', label: 'CTR', align: 'right' },
-  ];
+  const cols = isProductMode
+    ? [
+        { key: 'name', label: '캠페인명', align: 'left' },
+        { key: 'manager', label: '담당자', align: 'left' },
+        { key: 'postCode', label: '게시', align: 'left' },
+        { key: 'ageDays', label: '경과일', align: 'right' },
+        { key: 'ageGroup', label: '나이', align: 'left' },
+        { key: 'productCount', label: '제품수', align: 'right' },
+        { key: 'spend', label: '지출', align: 'right' },
+        { key: 'impressions', label: '노출', align: 'right' },
+        { key: 'clicks', label: '링크클릭', align: 'right' },
+        { key: 'ctr', label: 'CTR', align: 'right' },
+        { key: 'cpc', label: 'CPC', align: 'right' },
+      ]
+    : [
+        { key: 'name', label: '캠페인명', align: 'left' },
+        { key: 'manager', label: '담당자', align: 'left' },
+        { key: 'postCode', label: '게시', align: 'left' },
+        { key: 'ageDays', label: '경과일', align: 'right' },
+        { key: 'ageGroup', label: '나이', align: 'left' },
+        { key: 'status', label: '상태', align: 'left' },
+        { key: 'spend', label: '지출', align: 'right' },
+        { key: 'revenue', label: '매출', align: 'right' },
+        { key: 'roas', label: 'ROAS', align: 'right' },
+        { key: 'purchases', label: '구매', align: 'right' },
+        { key: 'carts', label: '장바구니', align: 'right' },
+        { key: 'buyRate', label: '구매전환', align: 'right' },
+        { key: 'cpc', label: 'CPC', align: 'right' },
+        { key: 'impressions', label: '노출(역산)', align: 'right' },
+        { key: 'ctr', label: 'CTR', align: 'right' },
+      ];
 
   const cellValue = (c, key) => {
     switch (key) {
@@ -1669,7 +1823,9 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
       case 'ageDays': return c.ageDays == null ? '-' : `${c.ageDays}일`;
       case 'ageGroup': return c.ageGroup || '-';
       case 'status': return AD_STATUS_LABEL[c.status] || c.status || '-';
-      case 'spend': case 'revenue': case 'cpc': case 'impressions': return fmtWon0(c[key]);
+      case 'productCount': return `${c.productCount || 0}개`;
+      case 'spend': case 'revenue': case 'cpc': case 'cpm': case 'impressions': case 'clicks':
+        return fmtWon0(c[key]);
       case 'roas': return (c.roas || 0).toFixed(2);
       case 'buyRate': case 'ctr': return fmtPct1(c[key]);
       case 'purchases': case 'carts': return (c[key] || 0).toLocaleString();
@@ -1677,21 +1833,29 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
     }
   };
 
-  const summaryCards = [
-    { label: '총 광고비', value: `${fmtWon0(totals.spend)}원` },
-    { label: '총 매출', value: `${fmtWon0(totals.revenue)}원` },
-    { label: '통합 ROAS', value: totals.roas.toFixed(2), hi: true },
-    { label: '총 구매', value: `${totals.purchases.toLocaleString()}건` },
-    { label: '장바구니→구매', value: fmtPct1(totals.buyRate) },
-  ];
+  const summaryCards = isProductMode
+    ? [
+        { label: '총 광고비', value: `${fmtWon0(totals.spend)}원` },
+        { label: '총 노출', value: fmtWon0(totals.impressions) },
+        { label: '총 링크클릭', value: fmtWon0(totals.clicks) },
+        { label: '평균 CTR', value: fmtPct1(totals.ctr), hi: true },
+        { label: '캠페인 / 제품', value: `${campaigns.length} / ${totalProducts}` },
+      ]
+    : [
+        { label: '총 광고비', value: `${fmtWon0(totals.spend)}원` },
+        { label: '총 매출', value: `${fmtWon0(totals.revenue)}원` },
+        { label: '통합 ROAS', value: totals.roas.toFixed(2), hi: true },
+        { label: '총 구매', value: `${totals.purchases.toLocaleString()}건` },
+        { label: '장바구니→구매', value: fmtPct1(totals.buyRate) },
+      ];
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-2xl font-medium tracking-tight">메타 광고 성과</h2>
+          <h2 className="text-2xl font-medium tracking-tight">메타 광고 성과{isProductMode ? ' · 제품별' : ''}</h2>
           <p className="text-xs text-stone-500 mt-1">
-            {fileName} · 기간 {period} · 캠페인 {campaigns.length}개
+            {fileName} · 기간 {period} · 캠페인 {campaigns.length}개{isProductMode ? ` · 제품 ${totalProducts}개` : ''}
           </p>
         </div>
         <button
@@ -1732,8 +1896,17 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
               <th className="px-4 py-2 text-left font-medium">그룹</th>
               <th className="px-3 py-2 text-right font-medium">캠페인</th>
               <th className="px-3 py-2 text-right font-medium">지출</th>
-              <th className="px-3 py-2 text-right font-medium">매출</th>
-              <th className="px-3 py-2 text-right font-medium">통합 ROAS</th>
+              {isProductMode ? (
+                <>
+                  <th className="px-3 py-2 text-right font-medium">노출</th>
+                  <th className="px-3 py-2 text-right font-medium">링크클릭</th>
+                </>
+              ) : (
+                <>
+                  <th className="px-3 py-2 text-right font-medium">매출</th>
+                  <th className="px-3 py-2 text-right font-medium">통합 ROAS</th>
+                </>
+              )}
               <th className="px-3 py-2 text-right font-medium">CTR</th>
             </tr>
           </thead>
@@ -1747,13 +1920,21 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
                   className={`border-t border-cream-300 cursor-pointer ${sel ? 'bg-stone-900 text-cream-50' : 'hover:bg-cream-100'}`}
                 >
                   <td className="px-4 py-2">
-                    {s.id}{' '}
-                    <span className={sel ? 'text-cream-300' : 'text-stone-400'}>{s.range}</span>
+                    {s.id} <span className={sel ? 'text-cream-300' : 'text-stone-400'}>{s.range}</span>
                   </td>
                   <td className="px-3 py-2 text-right">{s.count}개</td>
                   <td className="px-3 py-2 text-right">{fmtWon0(s.spend)}</td>
-                  <td className="px-3 py-2 text-right">{fmtWon0(s.revenue)}</td>
-                  <td className="px-3 py-2 text-right font-medium">{s.roas.toFixed(2)}</td>
+                  {isProductMode ? (
+                    <>
+                      <td className="px-3 py-2 text-right">{fmtWon0(s.impressions)}</td>
+                      <td className="px-3 py-2 text-right">{fmtWon0(s.clicks)}</td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="px-3 py-2 text-right">{fmtWon0(s.revenue)}</td>
+                      <td className="px-3 py-2 text-right font-medium">{s.roas.toFixed(2)}</td>
+                    </>
+                  )}
                   <td className="px-3 py-2 text-right">{fmtPct1(s.ctr)}</td>
                 </tr>
               );
@@ -1767,36 +1948,40 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
         )}
       </div>
 
-      <div className="flex items-center gap-3 flex-wrap bg-cream-50 border border-cream-400 px-4 py-3">
-        <label className="text-sm text-stone-700">목표 ROAS</label>
-        <input
-          type="number"
-          min="0"
-          step="0.1"
-          value={targetRoas}
-          onChange={e => setTargetRoas(parseFloat(e.target.value) || 0)}
-          className="w-20 px-2 py-1 text-sm border border-cream-400 bg-cream-100"
-        />
-        <span className="text-sm text-stone-600">
-          미만 캠페인 <span className="font-medium text-rose-700">{belowCount}개</span> — 소재 교체·예산 재배분 검토 대상
-        </span>
-        <div className="ml-auto flex items-center gap-1">
-          <span className="text-xs text-stone-500 mr-1">상태</span>
-          {statuses.map(s => (
-            <button
-              key={s}
-              onClick={() => setStatusFilter(s)}
-              className={`px-2 py-0.5 text-xs border transition ${
-                statusFilter === s
-                  ? 'bg-stone-900 text-cream-50 border-stone-900'
-                  : 'bg-cream-50 text-stone-700 border-cream-400 hover:border-stone-700'
-              }`}
-            >
-              {s === 'all' ? '전체' : (AD_STATUS_LABEL[s] || s)}
-            </button>
-          ))}
+      {!isProductMode && (
+        <div className="flex items-center gap-3 flex-wrap bg-cream-50 border border-cream-400 px-4 py-3">
+          <label className="text-sm text-stone-700">목표 ROAS</label>
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            value={targetRoas}
+            onChange={e => setTargetRoas(parseFloat(e.target.value) || 0)}
+            className="w-20 px-2 py-1 text-sm border border-cream-400 bg-cream-100"
+          />
+          <span className="text-sm text-stone-600">
+            미만 캠페인 <span className="font-medium text-rose-700">{belowCount}개</span> — 소재 교체·예산 재배분 검토 대상
+          </span>
+          {statuses.length > 1 && (
+            <div className="ml-auto flex items-center gap-1">
+              <span className="text-xs text-stone-500 mr-1">상태</span>
+              {statuses.map(s => (
+                <button
+                  key={s}
+                  onClick={() => setStatusFilter(s)}
+                  className={`px-2 py-0.5 text-xs border transition ${
+                    statusFilter === s
+                      ? 'bg-stone-900 text-cream-50 border-stone-900'
+                      : 'bg-cream-50 text-stone-700 border-cream-400 hover:border-stone-700'
+                  }`}
+                >
+                  {s === 'all' ? '전체' : (AD_STATUS_LABEL[s] || s)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      </div>
+      )}
 
       <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
         <table className="w-full text-sm">
@@ -1818,24 +2003,70 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
           </thead>
           <tbody>
             {rows.map((c, i) => {
-              const below = c.spend > 0 && c.roas < targetRoas;
+              const below = !isProductMode && c.spend > 0 && c.roas < targetRoas;
+              const isOpen = expanded.has(c.name);
               return (
-                <tr key={c.name + i} className="border-t border-cream-300 hover:bg-cream-100">
-                  <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
-                  {cols.map(col => (
-                    <td
-                      key={col.key}
-                      title={col.key === 'name' ? c.name : undefined}
-                      className={`px-3 py-2 whitespace-nowrap ${col.align === 'right' ? 'text-right' : 'text-left'} ${
-                        col.key === 'roas'
-                          ? (below ? 'text-rose-700 font-medium' : 'font-medium')
-                          : 'text-stone-700'
-                      } ${col.key === 'name' ? 'max-w-[260px] truncate' : ''}`}
-                    >
-                      {cellValue(c, col.key)}
-                    </td>
-                  ))}
-                </tr>
+                <React.Fragment key={c.name + i}>
+                  <tr
+                    className={`border-t border-cream-300 hover:bg-cream-100 ${isProductMode ? 'cursor-pointer' : ''}`}
+                    onClick={isProductMode ? () => toggleExpand(c.name) : undefined}
+                  >
+                    <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
+                    {cols.map(col => (
+                      <td
+                        key={col.key}
+                        title={col.key === 'name' ? c.name : undefined}
+                        className={`px-3 py-2 whitespace-nowrap ${col.align === 'right' ? 'text-right' : 'text-left'} ${
+                          col.key === 'roas'
+                            ? (below ? 'text-rose-700 font-medium' : 'font-medium')
+                            : 'text-stone-700'
+                        } ${col.key === 'name' ? 'max-w-[260px] truncate' : ''}`}
+                      >
+                        {col.key === 'name' && isProductMode ? (
+                          <span>
+                            <span className="text-stone-400 mr-1">{isOpen ? '▾' : '▸'}</span>
+                            {cellValue(c, col.key)}
+                          </span>
+                        ) : cellValue(c, col.key)}
+                      </td>
+                    ))}
+                  </tr>
+                  {isProductMode && isOpen && (
+                    <tr className="border-t border-cream-300">
+                      <td colSpan={cols.length + 1} className="p-0 bg-cream-100">
+                        <div className="px-6 py-3">
+                          <div className="text-xs font-medium text-stone-600 mb-2">
+                            {c.name} · 제품 {c.products.length}개 (지출 많은 순)
+                          </div>
+                          <table className="w-full text-xs">
+                            <thead className="text-stone-500">
+                              <tr>
+                                <th className="px-2 py-1.5 text-left font-medium">제품명</th>
+                                <th className="px-2 py-1.5 text-right font-medium">지출</th>
+                                <th className="px-2 py-1.5 text-right font-medium">노출</th>
+                                <th className="px-2 py-1.5 text-right font-medium">링크클릭</th>
+                                <th className="px-2 py-1.5 text-right font-medium">CTR</th>
+                                <th className="px-2 py-1.5 text-right font-medium">CPC</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {c.products.map((p, pi) => (
+                                <tr key={p.productId + pi} className="border-t border-cream-300">
+                                  <td className="px-2 py-1.5 text-stone-700">{p.productName}</td>
+                                  <td className="px-2 py-1.5 text-right text-stone-600">{fmtWon0(p.spend)}</td>
+                                  <td className="px-2 py-1.5 text-right text-stone-600">{fmtWon0(p.impressions)}</td>
+                                  <td className="px-2 py-1.5 text-right text-stone-600">{fmtWon0(p.clicks)}</td>
+                                  <td className="px-2 py-1.5 text-right text-stone-600">{fmtPct1(p.ctr)}</td>
+                                  <td className="px-2 py-1.5 text-right text-stone-600">{fmtWon0(p.cpc)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               );
             })}
           </tbody>
@@ -1843,8 +2074,9 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
       </div>
 
       <p className="text-xs text-stone-500 leading-relaxed">
-        노출·클릭은 CPM·CPC로 역산한 추정치예요. ROAS는 게시 직후 지출이 적은 캠페인일수록 변동이 크니,
-        지출 규모를 함께 보고 판단하세요.
+        {isProductMode
+          ? '제품별 지출·노출·링크클릭·CTR은 정확한 값이에요. 메타는 제품 단위로는 ROAS·매출을 제공하지 않아 이 화면엔 노출·클릭 효율 위주로 표시됩니다. 캠페인명을 클릭하면 제품별 상세가 펼쳐집니다.'
+          : '노출·클릭은 CPM·CPC로 역산한 추정치예요. ROAS는 게시 직후 지출이 적은 캠페인일수록 변동이 크니, 지출 규모를 함께 보고 판단하세요.'}
       </p>
     </div>
   );
