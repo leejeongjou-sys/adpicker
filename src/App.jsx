@@ -190,6 +190,77 @@ const parseCsvLine = (line) => {
   return result;
 };
 
+const parseCsvRows = (text) => {
+  const rows = [];
+  let row = [], cur = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { cur += '"'; i++; }
+        else inQ = false;
+      } else cur += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ',') { row.push(cur); cur = ''; }
+      else if (c === '\r') { /* skip */ }
+      else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+      else cur += c;
+    }
+  }
+  if (cur.length || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+};
+
+const isAdListCsv = (text) => {
+  const head = text.slice(0, 600);
+  return head.includes('광고 이름') && head.includes('상품리스트');
+};
+
+const parseAdList = (text) => {
+  const rows = parseCsvRows(text);
+  if (rows.length < 3) throw new Error('광고리스트 데이터가 없습니다.');
+  const header = rows[0].map(h => (h || '').trim());
+  const idx = (name) => header.findIndex(h => h === name);
+  const cNo = idx('No') >= 0 ? idx('No') : 0;
+  const cName = idx('광고 이름') >= 0 ? idx('광고 이름') : 1;
+  const cStatus = idx('상태');
+  const cProduct = idx('상품리스트');
+  const cCount = idx('횟수');
+  if (cProduct < 0) throw new Error('상품리스트 컬럼을 찾을 수 없습니다.');
+
+  const campaigns = [];
+  let cur = null;
+  for (let r = 2; r < rows.length; r++) {
+    const row = rows[r];
+    const get = (i) => i >= 0 && row[i] != null ? String(row[i]).trim() : '';
+    const no = get(cNo);
+    const name = get(cName);
+    const prod = get(cProduct);
+    if (no && name) {
+      const m = name.match(/\((\d{3,4})\)\s*$/);
+      cur = {
+        no, name,
+        manager: (name.split('_')[0] || '').trim(),
+        status: get(cStatus),
+        postCode: m ? m[1].padStart(4, '0') : '',
+        products: [],
+      };
+      campaigns.push(cur);
+    }
+    if (cur && prod) {
+      const codes = (prod.match(/[A-Z]{3,5}\d{3,5}/g) || []);
+      cur.products.push({
+        raw: prod,
+        codes,
+        count: parseInt0(get(cCount)) || 1,
+      });
+    }
+  }
+  if (campaigns.length === 0) throw new Error('캠페인을 찾을 수 없습니다.');
+  return campaigns;
+};
+
 const parseProductCsv = (text) => {
   const lines = text.split(/\r?\n/).filter(l => l.length > 0);
   if (lines.length < 2) throw new Error('데이터 행이 없습니다.');
@@ -1096,6 +1167,8 @@ const App = () => {
   const [skus, setSkus] = useState([]);
   const [groups, setGroups] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
+  const [adList, setAdList] = useState(null);
+  const [adListName, setAdListName] = useState('');
   const [dateLabels, setDateLabels] = useState([]);
   const [fileName, setFileName] = useState('');
   const [mode, setMode] = useState(null);
@@ -1176,28 +1249,43 @@ const App = () => {
       if (!text.includes('상품명') && !text.includes('<table')) {
         text = new TextDecoder('utf-8').decode(buf);
       }
+
+      if (isAdListCsv(text)) {
+        const list = parseAdList(text);
+        setAdList(list);
+        setAdListName(file.name);
+        if (skus.length > 0) setMode('adtrack');
+        return;
+      }
+
       const isHtml = text.trimStart().startsWith('<');
-      const newMode = isHtml ? 'xls' : 'csv';
       if (isHtml) {
         const { skus: parsedSkus, dateLabels: dl } = parseHtmlXls(text);
         setSkus(parsedSkus);
         setGroups(groupByProduct(parsedSkus));
         setDateLabels(dl);
+        setFileName(file.name);
+        if (adList) {
+          setMode('adtrack');
+        } else {
+          if (mode !== 'xls') setTheme('bestseller');
+          setMode('xls');
+        }
       } else {
         const productGroups = parseProductCsv(text);
         setSkus([]);
         setGroups(productGroups);
         setDateLabels([]);
+        setFileName(file.name);
+        if (mode !== 'csv') setTheme('bestseller');
+        setMode('csv');
       }
-      if (newMode !== mode) setTheme('bestseller');
-      setMode(newMode);
-      setFileName(file.name);
     } catch (e) {
       setError(`파일 파싱 실패: ${e.message}`);
     } finally {
       setParsing(false);
     }
-  }, []);
+  }, [adList, skus, mode]);
 
   const preview = useMemo(() => {
     if (groups.length === 0) return [];
@@ -1383,7 +1471,24 @@ const App = () => {
           </div>
         )}
 
-        {mode === 'adperf' ? (
+        {mode === 'adtrack' ? (
+          <AdTrackView
+            adList={adList}
+            adListName={adListName}
+            groups={groups}
+            dateLabels={dateLabels}
+            fileName={fileName}
+            onReset={() => {
+              setAdList(null);
+              setAdListName('');
+              setSkus([]);
+              setGroups([]);
+              setDateLabels([]);
+              setFileName('');
+              setMode(null);
+            }}
+          />
+        ) : mode === 'adperf' ? (
           <AdPerformanceView
             campaigns={campaigns}
             fileName={fileName}
@@ -1398,6 +1503,9 @@ const App = () => {
             onFile={handleFile}
             parsing={parsing}
             inputRef={fileInputRef}
+            adList={adList}
+            adListName={adListName}
+            onClearAdList={() => { setAdList(null); setAdListName(''); }}
           />
         ) : (
           <div className="grid grid-cols-12 gap-6">
@@ -1639,44 +1747,63 @@ const ThemeSelectorModal = ({
   );
 };
 
-const UploadArea = ({ onFile, parsing, inputRef }) => {
+const UploadArea = ({ onFile, parsing, inputRef, adList, adListName, onClearAdList }) => {
   const [drag, setDrag] = useState(false);
   return (
-    <div
-      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-      onDragLeave={() => setDrag(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDrag(false);
-        const f = e.dataTransfer.files[0];
-        if (f) onFile(f);
-      }}
-      className={`border border-dashed p-20 text-center transition ${
-        drag ? 'border-stone-900 bg-cream-200' : 'border-cream-400 bg-cream-50'
-      }`}
-    >
-      <LucideUpload size={40} strokeWidth={1.2} className="mx-auto text-stone-500 mb-6" />
-      <h2 className="text-3xl font-medium mb-3 tracking-tight">데이터 파일을 올려주세요</h2>
-      <p className="text-sm text-stone-600 mb-8 font-light leading-relaxed">
-        <span className="font-medium text-stone-800">stk_forOptSalesInfo .xls</span> (SKU 단위 · 이미지 포함) ·{' '}
-        <span className="font-medium text-stone-800">sts_prdListStatistics .csv</span> (상품 누적) ·{' '}
-        <span className="font-medium text-stone-800">메타 광고 성과 .xlsx</span> — 세 형식 모두 자동 인식해요.
-        <br />파일을 끌어다 놓거나 아래 버튼으로 선택하세요. 데이터는 브라우저에서만 처리됩니다.
-      </p>
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".xls,.xlsx,.html,.htm,.csv"
-        className="hidden"
-        onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }}
-      />
-      <button
-        onClick={() => inputRef.current?.click()}
-        disabled={parsing}
-        className="bg-stone-900 hover:bg-stone-800 disabled:bg-stone-400 text-cream-50 px-8 py-3 font-medium tracking-wide text-sm"
+    <div className="space-y-4">
+      {adList && (
+        <div className="flex items-center gap-3 bg-cream-200 border border-cream-400 px-4 py-3">
+          <LucideMessageSquare size={16} className="text-stone-600 shrink-0" />
+          <div className="flex-1 text-sm">
+            <span className="font-medium text-stone-800">광고리스트 로드됨</span>
+            <span className="text-stone-500"> · {adListName} · 캠페인 {adList.length}개</span>
+            <div className="text-xs text-stone-500 mt-0.5">
+              이제 <span className="font-medium text-stone-700">상품 매출 .xls</span> 파일을 올리면 광고-판매 추적이 시작됩니다.
+            </div>
+          </div>
+          <button onClick={onClearAdList} className="text-stone-400 hover:text-stone-700">
+            <LucideX size={16} />
+          </button>
+        </div>
+      )}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDrag(false);
+          const f = e.dataTransfer.files[0];
+          if (f) onFile(f);
+        }}
+        className={`border border-dashed p-20 text-center transition ${
+          drag ? 'border-stone-900 bg-cream-200' : 'border-cream-400 bg-cream-50'
+        }`}
       >
-        {parsing ? '파싱 중...' : '파일 선택'}
-      </button>
+        <LucideUpload size={40} strokeWidth={1.2} className="mx-auto text-stone-500 mb-6" />
+        <h2 className="text-3xl font-medium mb-3 tracking-tight">데이터 파일을 올려주세요</h2>
+        <p className="text-sm text-stone-600 mb-8 font-light leading-relaxed">
+          <span className="font-medium text-stone-800">stk_forOptSalesInfo .xls</span> (SKU 단위 · 이미지 포함) ·{' '}
+          <span className="font-medium text-stone-800">sts_prdListStatistics .csv</span> (상품 누적) ·{' '}
+          <span className="font-medium text-stone-800">메타 광고 성과 .xlsx</span> ·{' '}
+          <span className="font-medium text-stone-800">SNS 광고리스트 .csv</span> — 모두 자동 인식해요.
+          <br />광고리스트 + 상품매출 .xls를 함께 올리면 광고-판매 추적 화면이 나옵니다.
+          <br />파일을 끌어다 놓거나 아래 버튼으로 선택하세요. 데이터는 브라우저에서만 처리됩니다.
+        </p>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".xls,.xlsx,.html,.htm,.csv"
+          className="hidden"
+          onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }}
+        />
+        <button
+          onClick={() => inputRef.current?.click()}
+          disabled={parsing}
+          className="bg-stone-900 hover:bg-stone-800 disabled:bg-stone-400 text-cream-50 px-8 py-3 font-medium tracking-wide text-sm"
+        >
+          {parsing ? '파싱 중...' : '파일 선택'}
+        </button>
+      </div>
     </div>
   );
 };
@@ -2077,6 +2204,227 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
         {isProductMode
           ? '제품별 지출·노출·링크클릭·CTR은 정확한 값이에요. 메타는 제품 단위로는 ROAS·매출을 제공하지 않아 이 화면엔 노출·클릭 효율 위주로 표시됩니다. 캠페인명을 클릭하면 제품별 상세가 펼쳐집니다.'
           : '노출·클릭은 CPM·CPC로 역산한 추정치예요. ROAS는 게시 직후 지출이 적은 캠페인일수록 변동이 크니, 지출 규모를 함께 보고 판단하세요.'}
+      </p>
+    </div>
+  );
+};
+
+const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset }) => {
+  const [showPrev, setShowPrev] = useState(false);
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [sortKey, setSortKey] = useState('totalSales');
+  const [sortDir, setSortDir] = useState('desc');
+
+  const codeMap = useMemo(() => {
+    const m = new Map();
+    for (const g of groups) {
+      const code = extractProductCode(g.productName);
+      if (code && !m.has(code)) m.set(code, g);
+    }
+    return m;
+  }, [groups]);
+
+  const dailyOf = (g) => {
+    const len = dateLabels.length;
+    const arr = new Array(len).fill(0);
+    for (const sku of g.skus || []) {
+      for (let i = 0; i < len; i++) arr[i] += sku.sales[i] || 0;
+    }
+    return arr;
+  };
+
+  const rows = useMemo(() => {
+    const reportEnd = dateLabels[dateLabels.length - 1] || '';
+    return adList.map(camp => {
+      const postDate = parsePostDate(camp.postCode, reportEnd);
+      const prevIdx = [], postIdx = [];
+      dateLabels.forEach((d, i) => {
+        const dd = new Date(d);
+        if (postDate && !isNaN(dd.getTime()) && dd < postDate) prevIdx.push(i);
+        else postIdx.push(i);
+      });
+      const prods = camp.products.map(p => {
+        const gs = p.codes.map(c => codeMap.get(c)).filter(Boolean);
+        const matched = gs.length > 0;
+        let total = 0, prevSum = 0, postSum = 0;
+        for (const g of gs) {
+          const daily = dailyOf(g);
+          total += daily.reduce((a, b) => a + b, 0);
+          prevSum += prevIdx.reduce((a, i) => a + daily[i], 0);
+          postSum += postIdx.reduce((a, i) => a + daily[i], 0);
+        }
+        return {
+          raw: p.raw, codes: p.codes, matched,
+          total,
+          prevAvg: prevIdx.length > 0 ? prevSum / prevIdx.length : null,
+          postAvg: postIdx.length > 0 ? postSum / postIdx.length : null,
+        };
+      });
+      return {
+        no: camp.no, name: camp.name, manager: camp.manager,
+        postCode: camp.postCode, status: camp.status,
+        prevDays: prevIdx.length, postDays: postIdx.length,
+        prods,
+        productCount: prods.length,
+        matchedCount: prods.filter(p => p.matched).length,
+        totalSales: prods.reduce((s, p) => s + p.total, 0),
+        prevAvg: prevIdx.length > 0 ? prods.reduce((s, p) => s + (p.prevAvg || 0), 0) : null,
+        postAvg: postIdx.length > 0 ? prods.reduce((s, p) => s + (p.postAvg || 0), 0) : null,
+      };
+    });
+  }, [adList, dateLabels, codeMap]);
+
+  const sortedRows = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      let cmp;
+      if (typeof av === 'string') cmp = String(av).localeCompare(String(bv));
+      else cmp = (av || 0) - (bv || 0);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [rows, sortKey, sortDir]);
+
+  const toggleSort = (k) => {
+    if (sortKey === k) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(k); setSortDir('desc'); }
+  };
+  const toggleExpand = (no) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(no)) next.delete(no); else next.add(no);
+      return next;
+    });
+  };
+
+  const period = dateLabels.length ? `${dateLabels[0]} ~ ${dateLabels[dateLabels.length - 1]}` : '';
+  const fmtPost = (pc) => pc ? `${pc.slice(0, 2)}/${pc.slice(2)}` : '-';
+  const fmtAvg = (v) => v == null ? '—' : v.toFixed(1);
+  const totalMatched = rows.reduce((s, c) => s + c.matchedCount, 0);
+  const totalProds = rows.reduce((s, c) => s + c.productCount, 0);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-2xl font-medium tracking-tight">광고-판매 추적</h2>
+          <p className="text-xs text-stone-500 mt-1">
+            광고 {adListName} · 매출 {fileName} · 기간 {period} · 캠페인 {rows.length}개 · 매칭 {totalMatched}/{totalProds}
+          </p>
+        </div>
+        <button
+          onClick={onReset}
+          className="text-sm text-stone-500 hover:text-stone-900 underline underline-offset-2"
+        >
+          다른 파일 불러오기
+        </button>
+      </div>
+
+      <div className="flex items-center gap-3 bg-cream-50 border border-cream-400 px-4 py-3">
+        <button
+          onClick={() => setShowPrev(v => !v)}
+          className={`px-3 py-1.5 text-sm border transition ${
+            showPrev
+              ? 'bg-stone-900 text-cream-50 border-stone-900'
+              : 'bg-cream-50 text-stone-700 border-cream-400 hover:border-stone-700'
+          }`}
+        >
+          게시 전 비교 {showPrev ? 'ON' : 'OFF'}
+        </button>
+        <span className="text-xs text-stone-500 leading-relaxed">
+          켜면 캠페인 게시일 기준 게시 전·후 일평균 판매를 함께 표시합니다. 게시일이 매출 데이터 기간보다 이르면 게시 전은 '—'로 표시돼요.
+        </span>
+      </div>
+
+      <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-cream-200 text-stone-600">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">#</th>
+              <th onClick={() => toggleSort('name')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
+                캠페인명{sortKey === 'name' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+              </th>
+              <th onClick={() => toggleSort('manager')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">담당자</th>
+              <th onClick={() => toggleSort('postCode')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">게시일</th>
+              <th onClick={() => toggleSort('productCount')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">상품수</th>
+              <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매칭</th>
+              <th onClick={() => toggleSort('totalSales')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
+                기간 판매{sortKey === 'totalSales' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+              </th>
+              {showPrev && (
+                <th onClick={() => toggleSort('prevAvg')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">게시전 일평균</th>
+              )}
+              {showPrev && (
+                <th onClick={() => toggleSort('postAvg')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">게시후 일평균</th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.map((c, i) => {
+              const isOpen = expanded.has(c.no);
+              return (
+                <React.Fragment key={c.no + i}>
+                  <tr
+                    className="border-t border-cream-300 hover:bg-cream-100 cursor-pointer"
+                    onClick={() => toggleExpand(c.no)}
+                  >
+                    <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
+                    <td className="px-3 py-2 whitespace-nowrap max-w-[280px] truncate" title={c.name}>
+                      <span className="text-stone-400 mr-1">{isOpen ? '▾' : '▸'}</span>{c.name}
+                    </td>
+                    <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{c.manager}</td>
+                    <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{fmtPost(c.postCode)}</td>
+                    <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.productCount}</td>
+                    <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.matchedCount}/{c.productCount}</td>
+                    <td className="px-3 py-2 text-right font-medium whitespace-nowrap">{c.totalSales.toLocaleString()}</td>
+                    {showPrev && <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{fmtAvg(c.prevAvg)}</td>}
+                    {showPrev && <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{fmtAvg(c.postAvg)}</td>}
+                  </tr>
+                  {isOpen && (
+                    <tr className="border-t border-cream-300">
+                      <td colSpan={showPrev ? 9 : 7} className="p-0 bg-cream-100">
+                        <div className="px-6 py-3">
+                          <div className="text-xs font-medium text-stone-600 mb-2">
+                            {c.name} · 상품 {c.productCount}개 · 게시 {fmtPost(c.postCode)}
+                            {showPrev && ` · 게시전 ${c.prevDays}일 / 게시후 ${c.postDays}일`}
+                          </div>
+                          <table className="w-full text-xs">
+                            <thead className="text-stone-500">
+                              <tr>
+                                <th className="px-2 py-1.5 text-left font-medium">상품</th>
+                                <th className="px-2 py-1.5 text-left font-medium">코드</th>
+                                <th className="px-2 py-1.5 text-right font-medium">기간 판매</th>
+                                {showPrev && <th className="px-2 py-1.5 text-right font-medium">게시전 일평균</th>}
+                                {showPrev && <th className="px-2 py-1.5 text-right font-medium">게시후 일평균</th>}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {c.prods.map((p, pi) => (
+                                <tr key={pi} className="border-t border-cream-300">
+                                  <td className="px-2 py-1.5 text-stone-700">{p.raw}</td>
+                                  <td className="px-2 py-1.5 text-stone-500">
+                                    {p.matched ? p.codes.join(', ') : <span className="text-rose-600">미매칭</span>}
+                                  </td>
+                                  <td className="px-2 py-1.5 text-right text-stone-600">{p.matched ? p.total.toLocaleString() : '—'}</td>
+                                  {showPrev && <td className="px-2 py-1.5 text-right text-stone-600">{p.matched ? fmtAvg(p.prevAvg) : '—'}</td>}
+                                  {showPrev && <td className="px-2 py-1.5 text-right text-stone-600">{p.matched ? fmtAvg(p.postAvg) : '—'}</td>}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="text-xs text-stone-500 leading-relaxed">
+        광고리스트의 상품과 매출 파일을 상품코드(영문+숫자)로 매칭했어요. '미매칭'은 매출 파일에 같은 코드의 상품이 없는 경우입니다.
+        '게시 전 비교'를 켜면 캠페인 게시일 기준으로 게시 전·후 일평균 판매가 나뉘어 표시됩니다.
       </p>
     </div>
   );
