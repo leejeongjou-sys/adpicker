@@ -2383,6 +2383,7 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
 };
 
 const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset }) => {
+  const [viewMode, setViewMode] = useState('product');
   const [periodMode, setPeriodMode] = useState('day');
   const [expanded, setExpanded] = useState(() => new Set());
   const [sortKey, setSortKey] = useState('adCount');
@@ -2413,6 +2414,21 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
     return out;
   }, [periodMode, dateLabels]);
 
+  const dailyOfGroup = (g, len) => {
+    const arr = new Array(len).fill(0);
+    for (const sku of g.skus || []) {
+      for (let i = 0; i < len; i++) arr[i] += sku.sales[i] || 0;
+    }
+    return arr;
+  };
+
+  const postIdxOf = (postCode) => {
+    if (!postCode) return -1;
+    const md = postCode.slice(0, 2) + '/' + postCode.slice(2);
+    return dateLabels.findIndex(d => d.slice(5).replace('-', '/') === md);
+  };
+
+  // 상품 중심
   const products = useMemo(() => {
     const pm = new Map();
     for (const camp of adList) {
@@ -2437,9 +2453,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
       let daily = new Array(len).fill(0), total = 0, imageUrl = null;
       let productName = prod.adName;
       if (g) {
-        for (const sku of g.skus || []) {
-          for (let i = 0; i < len; i++) daily[i] += sku.sales[i] || 0;
-        }
+        daily = dailyOfGroup(g, len);
         total = daily.reduce((a, b) => a + b, 0);
         imageUrl = g.imageUrl;
         productName = g.productName;
@@ -2449,9 +2463,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
         .sort((a, b) => (b.postCode || '').localeCompare(a.postCode || ''));
       const campWithEffect = sortedCamps.map(c => {
         let nextDaySales = null;
-        if (g && c.postCode) {
-          const md = c.postCode.slice(0, 2) + '/' + c.postCode.slice(2);
-          const pi = dateLabels.findIndex(d => d.slice(5).replace('-', '/') === md);
+        if (g) {
+          const pi = postIdxOf(c.postCode);
           if (pi >= 0 && pi + 1 < len) nextDaySales = daily[pi + 1];
         }
         return { ...c, nextDaySales };
@@ -2466,6 +2479,45 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
         matched: !!g, daily, total,
         campaigns: campWithEffect,
         adCount: campWithEffect.length,
+      };
+    });
+  }, [adList, codeMap, dateLabels]);
+
+  // 광고 중심
+  const campaignRows = useMemo(() => {
+    const len = dateLabels.length;
+    return adList.map(camp => {
+      const pi = postIdxOf(camp.postCode);
+      const prods = camp.products.map(p => {
+        const code = (p.codes || []).find(c => codeMap.has(c)) || (p.codes || [])[0] || '';
+        const g = code ? codeMap.get(code) : null;
+        let daily = new Array(len).fill(0), total = 0, nextDaySales = null;
+        let productName = p.raw, imageUrl = null;
+        if (g) {
+          daily = dailyOfGroup(g, len);
+          total = daily.reduce((a, b) => a + b, 0);
+          productName = g.productName;
+          imageUrl = g.imageUrl;
+          if (pi >= 0 && pi + 1 < len) nextDaySales = daily[pi + 1];
+        }
+        return {
+          raw: p.raw, code, codes: p.codes, thumbUrl: p.thumbUrl || null,
+          matched: !!g, productName, imageUrl, daily, total, nextDaySales,
+        };
+      });
+      const validNext = prods.filter(x => x.nextDaySales != null).map(x => x.nextDaySales);
+      const maxNext = validNext.length ? Math.max(...validNext) : 0;
+      prods.forEach(x => {
+        x.isBest = x.nextDaySales != null && x.nextDaySales === maxNext && maxNext > 0;
+      });
+      return {
+        no: camp.no, name: camp.name, manager: camp.manager,
+        postCode: camp.postCode, status: camp.status,
+        prods,
+        productCount: prods.length,
+        matchedCount: prods.filter(x => x.matched).length,
+        nextDayTotal: prods.reduce((s, x) => s + (x.nextDaySales || 0), 0),
+        bestName: (prods.find(x => x.isBest) || {}).productName || '',
       };
     });
   }, [adList, codeMap, dateLabels]);
@@ -2489,14 +2541,26 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
     });
   }, [products, sortKey, sortDir, query]);
 
+  const sortedCampaigns = useMemo(() => {
+    let list = campaignRows;
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      list = list.filter(c =>
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.manager || '').toLowerCase().includes(q)
+      );
+    }
+    return [...list].sort((a, b) => (b.postCode || '').localeCompare(a.postCode || ''));
+  }, [campaignRows, query]);
+
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(k); setSortDir('desc'); }
   };
-  const toggleExpand = (code) => {
+  const toggleExpand = (key) => {
     setExpanded(prev => {
       const next = new Set(prev);
-      if (next.has(code)) next.delete(code); else next.add(code);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
   };
@@ -2506,13 +2570,39 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
   const matchedCount = products.filter(p => p.matched).length;
   const hasThumb = adList.some(c => c.products.some(p => p.thumbUrl));
 
+  const ProductCard = ({ thumbUrl, title, sub, nextDaySales, isBest }) => (
+    <div className={`w-40 bg-cream-50 ${isBest ? 'border-4 border-stone-900' : 'border border-cream-400'}`}>
+      <div className="w-full h-40 bg-cream-200 overflow-hidden flex items-center justify-center relative">
+        {thumbUrl ? (
+          <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <span className="text-xs text-stone-400">이미지 없음</span>
+        )}
+        {isBest && (
+          <span className="absolute top-0 left-0 bg-stone-900 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">
+            BEST
+          </span>
+        )}
+      </div>
+      <div className="px-2 py-1.5">
+        <div className="text-xs font-medium text-stone-700 truncate" title={title}>{title}</div>
+        <div className="text-[11px] text-stone-500 mt-0.5">{sub}</div>
+        <div className={`text-[11px] mt-0.5 ${isBest ? 'text-stone-900 font-medium' : 'text-stone-500'}`}>
+          게시 다음날 판매 {nextDaySales == null ? '—' : nextDaySales}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-2xl font-medium tracking-tight">광고-판매 추적 · 상품별</h2>
+          <h2 className="text-2xl font-medium tracking-tight">
+            광고-판매 추적 · {viewMode === 'product' ? '상품별' : '광고별'}
+          </h2>
           <p className="text-xs text-stone-500 mt-1">
-            광고 {adListName} · 매출 {fileName} · 기간 {period} · 상품 {products.length}개 (매출매칭 {matchedCount})
+            광고 {adListName} · 매출 {fileName} · 기간 {period} · 상품 {products.length}개 (매출매칭 {matchedCount}) · 캠페인 {campaignRows.length}개
           </p>
         </div>
         <button
@@ -2530,13 +2620,26 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
       )}
 
       <div className="flex items-center gap-3 bg-cream-50 border border-cream-400 px-4 py-3 flex-wrap">
+        <div className="flex items-center border border-cream-400">
+          {[['product', '상품별'], ['campaign', '광고별']].map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => { setViewMode(v); setExpanded(new Set()); }}
+              className={`px-3 py-1.5 text-sm transition ${
+                viewMode === v ? 'bg-stone-900 text-cream-50' : 'bg-cream-50 text-stone-700 hover:bg-cream-200'
+              }`}
+            >
+              {label} 보기
+            </button>
+          ))}
+        </div>
         <div className="flex items-center gap-1.5 bg-cream-100 px-2.5 py-1.5 border border-cream-400">
           <LucideSearch size={13} className="text-stone-500" />
           <input
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="상품명·코드 검색"
+            placeholder={viewMode === 'product' ? '상품명·코드 검색' : '캠페인·담당자 검색'}
             className="text-sm bg-transparent focus:outline-none w-40 placeholder:text-stone-400"
           />
           {query && (
@@ -2545,176 +2648,229 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
             </button>
           )}
         </div>
-        <div className="flex items-center border border-cream-400">
-          <span className="px-2 text-xs text-stone-500">기간 단위</span>
-          {[['day', '일별'], ['week', '주별']].map(([v, label]) => (
-            <button
-              key={v}
-              onClick={() => setPeriodMode(v)}
-              className={`px-3 py-1.5 text-sm transition ${
-                periodMode === v ? 'bg-stone-900 text-cream-50' : 'bg-cream-50 text-stone-700 hover:bg-cream-200'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {viewMode === 'product' && (
+          <div className="flex items-center border border-cream-400">
+            <span className="px-2 text-xs text-stone-500">기간 단위</span>
+            {[['day', '일별'], ['week', '주별']].map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setPeriodMode(v)}
+                className={`px-3 py-1.5 text-sm transition ${
+                  periodMode === v ? 'bg-stone-900 text-cream-50' : 'bg-cream-50 text-stone-700 hover:bg-cream-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         <span className="text-xs text-stone-500">
-          상품 행을 클릭하면 광고에 쓰인 이미지들과 기간별 판매가 펼쳐집니다.
+          {viewMode === 'product'
+            ? '상품을 클릭하면 그 상품을 쓴 광고 이미지들과 기간별 판매가 펼쳐집니다.'
+            : '광고를 클릭하면 그 광고에 담긴 상품들이 펼쳐지고, 게시 다음날 판매가 가장 높은 상품이 강조됩니다.'}
         </span>
       </div>
 
-      <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-cream-200 text-stone-600">
-            <tr>
-              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">#</th>
-              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">이미지</th>
-              <th onClick={() => toggleSort('productName')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
-                상품명{sortKey === 'productName' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
-              </th>
-              <th onClick={() => toggleSort('code')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">코드</th>
-              <th onClick={() => toggleSort('adCount')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
-                광고 횟수{sortKey === 'adCount' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
-              </th>
-              <th onClick={() => toggleSort('total')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
-                기간 판매{sortKey === 'total' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedProducts.map((p, i) => {
-              const isOpen = expanded.has(p.code || p.adName);
-              const key = p.code || p.adName;
-              return (
-                <React.Fragment key={key + i}>
-                  <tr
-                    className="border-t border-cream-300 hover:bg-cream-100 cursor-pointer"
-                    onClick={() => toggleExpand(key)}
-                  >
-                    <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
-                    <td className="px-3 py-2">
-                      <div className="w-12 h-12 bg-cream-200 border border-cream-400 overflow-hidden flex items-center justify-center">
-                        {p.imageUrl && p.imageUrl !== '이미지없음' ? (
-                          <img src={p.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
-                        ) : (
-                          <span className="text-[10px] text-stone-400">없음</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap max-w-[340px] truncate" title={p.productName}>
-                      <span className="text-stone-400 mr-1">{isOpen ? '▾' : '▸'}</span>
-                      {p.productName}
-                      {!p.matched && <span className="text-rose-600 text-xs ml-1">(매출 미매칭)</span>}
-                    </td>
-                    <td className="px-3 py-2 text-stone-500 whitespace-nowrap">{p.code || '-'}</td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      <span className="inline-flex items-center justify-center min-w-[1.6rem] px-1.5 py-0.5 bg-stone-900 text-cream-50 text-xs font-medium">
-                        {p.adCount}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-right font-medium whitespace-nowrap">
-                      {p.matched ? p.total.toLocaleString() : '—'}
-                    </td>
-                  </tr>
-                  {isOpen && (
-                    <tr className="border-t border-cream-300">
-                      <td colSpan={6} className="p-0 bg-cream-100">
-                        <div className="px-6 py-4 space-y-4">
-                          <div>
-                            <div className="text-xs font-medium text-stone-600 mb-2">
-                              이 상품이 들어간 광고 {p.campaigns.length}개 — 광고별 사용 이미지
-                              <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 게시 다음날 판매가 가장 높았던 광고)</span>
-                            </div>
-                            <div className="flex flex-wrap gap-3">
-                              {p.campaigns.map((c, ci) => (
-                                <div
-                                  key={ci}
-                                  className={`w-40 bg-cream-50 ${c.isBest ? 'border-4 border-stone-900' : 'border border-cream-400'}`}
-                                >
-                                  <div className="w-full h-40 bg-cream-200 overflow-hidden flex items-center justify-center relative">
-                                    {c.thumbUrl ? (
-                                      <img src={c.thumbUrl} alt="" className="w-full h-full object-cover" />
-                                    ) : (
-                                      <span className="text-xs text-stone-400">이미지 없음</span>
-                                    )}
-                                    {c.isBest && (
-                                      <span className="absolute top-0 left-0 bg-stone-900 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">
-                                        BEST
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="px-2 py-1.5">
-                                    <div className="text-xs font-medium text-stone-700 truncate" title={c.name}>{c.name}</div>
-                                    <div className="text-[11px] text-stone-500 mt-0.5">게시 {fmtPost(c.postCode)} · {c.manager}</div>
-                                    <div className={`text-[11px] mt-0.5 ${c.isBest ? 'text-stone-900 font-medium' : 'text-stone-500'}`}>
-                                      게시 다음날 판매 {c.nextDaySales == null ? '—' : c.nextDaySales}
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          {p.matched ? (
-                            <div className="overflow-x-auto">
-                              <div className="text-xs font-medium text-stone-600 mb-2">
-                                {periodMode === 'day' ? '일별' : '주별'} 판매량
-                                <span className="text-stone-400 font-normal"> (▲ = 광고 게시일)</span>
-                              </div>
-                              <table className="text-xs">
-                                <thead className="text-stone-500">
-                                  <tr>
-                                    {periods.map((pd, idx) => {
-                                      const marker = p.campaigns.some(c => {
-                                        if (!c.postCode) return false;
-                                        const md = c.postCode.slice(0, 2) + '/' + c.postCode.slice(2);
-                                        return pd.idx.some(di => dateLabels[di].slice(5).replace('-', '/') === md);
-                                      });
-                                      return (
-                                        <th key={idx} className="px-2 py-1.5 text-right font-medium whitespace-nowrap">
-                                          {marker ? <span className="text-stone-900">▲ </span> : ''}{pd.label}
-                                        </th>
-                                      );
-                                    })}
-                                    <th className="px-2 py-1.5 text-right font-medium">합계</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  <tr className="border-t border-cream-300">
-                                    {periods.map((pd, idx) => {
-                                      const v = pd.idx.reduce((a, di) => a + (p.daily[di] || 0), 0);
-                                      return (
-                                        <td key={idx} className={`px-2 py-1.5 text-right whitespace-nowrap ${v ? 'text-stone-700' : 'text-stone-400'}`}>
-                                          {v}
-                                        </td>
-                                      );
-                                    })}
-                                    <td className="px-2 py-1.5 text-right font-medium text-stone-700">{p.total.toLocaleString()}</td>
-                                  </tr>
-                                </tbody>
-                              </table>
-                            </div>
+      {viewMode === 'product' ? (
+        <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-cream-200 text-stone-600">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">#</th>
+                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">이미지</th>
+                <th onClick={() => toggleSort('productName')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
+                  상품명{sortKey === 'productName' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </th>
+                <th onClick={() => toggleSort('code')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">코드</th>
+                <th onClick={() => toggleSort('adCount')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
+                  광고 횟수{sortKey === 'adCount' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </th>
+                <th onClick={() => toggleSort('total')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
+                  기간 판매{sortKey === 'total' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedProducts.map((p, i) => {
+                const key = 'P' + (p.code || p.adName);
+                const isOpen = expanded.has(key);
+                return (
+                  <React.Fragment key={key + i}>
+                    <tr className="border-t border-cream-300 hover:bg-cream-100 cursor-pointer" onClick={() => toggleExpand(key)}>
+                      <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
+                      <td className="px-3 py-2">
+                        <div className="w-12 h-12 bg-cream-200 border border-cream-400 overflow-hidden flex items-center justify-center">
+                          {p.imageUrl && p.imageUrl !== '이미지없음' ? (
+                            <img src={p.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
                           ) : (
-                            <div className="text-xs text-stone-500">매출 파일에 이 코드({p.code || '코드 없음'})의 상품이 없어 판매량을 표시할 수 없어요.</div>
+                            <span className="text-[10px] text-stone-400">없음</span>
                           )}
                         </div>
                       </td>
+                      <td className="px-3 py-2 whitespace-nowrap max-w-[340px] truncate" title={p.productName}>
+                        <span className="text-stone-400 mr-1">{isOpen ? '▾' : '▸'}</span>
+                        {p.productName}
+                        {!p.matched && <span className="text-rose-600 text-xs ml-1">(매출 미매칭)</span>}
+                      </td>
+                      <td className="px-3 py-2 text-stone-500 whitespace-nowrap">{p.code || '-'}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <span className="inline-flex items-center justify-center min-w-[1.6rem] px-1.5 py-0.5 bg-stone-900 text-cream-50 text-xs font-medium">
+                          {p.adCount}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right font-medium whitespace-nowrap">
+                        {p.matched ? p.total.toLocaleString() : '—'}
+                      </td>
                     </tr>
-                  )}
-                </React.Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    {isOpen && (
+                      <tr className="border-t border-cream-300">
+                        <td colSpan={6} className="p-0 bg-cream-100">
+                          <div className="px-6 py-4 space-y-4">
+                            <div>
+                              <div className="text-xs font-medium text-stone-600 mb-2">
+                                이 상품이 들어간 광고 {p.campaigns.length}개 — 광고별 사용 이미지
+                                <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 게시 다음날 판매가 가장 높았던 광고)</span>
+                              </div>
+                              <div className="flex flex-wrap gap-3">
+                                {p.campaigns.map((c, ci) => (
+                                  <ProductCard
+                                    key={ci}
+                                    thumbUrl={c.thumbUrl}
+                                    title={c.name}
+                                    sub={`게시 ${fmtPost(c.postCode)} · ${c.manager}`}
+                                    nextDaySales={c.nextDaySales}
+                                    isBest={c.isBest}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            {p.matched ? (
+                              <div className="overflow-x-auto">
+                                <div className="text-xs font-medium text-stone-600 mb-2">
+                                  {periodMode === 'day' ? '일별' : '주별'} 판매량
+                                  <span className="text-stone-400 font-normal"> (▲ = 광고 게시일)</span>
+                                </div>
+                                <table className="text-xs">
+                                  <thead className="text-stone-500">
+                                    <tr>
+                                      {periods.map((pd, idx) => {
+                                        const marker = p.campaigns.some(c => {
+                                          if (!c.postCode) return false;
+                                          const md = c.postCode.slice(0, 2) + '/' + c.postCode.slice(2);
+                                          return pd.idx.some(di => dateLabels[di].slice(5).replace('-', '/') === md);
+                                        });
+                                        return (
+                                          <th key={idx} className="px-2 py-1.5 text-right font-medium whitespace-nowrap">
+                                            {marker ? <span className="text-stone-900">▲ </span> : ''}{pd.label}
+                                          </th>
+                                        );
+                                      })}
+                                      <th className="px-2 py-1.5 text-right font-medium">합계</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr className="border-t border-cream-300">
+                                      {periods.map((pd, idx) => {
+                                        const v = pd.idx.reduce((a, di) => a + (p.daily[di] || 0), 0);
+                                        return (
+                                          <td key={idx} className={`px-2 py-1.5 text-right whitespace-nowrap ${v ? 'text-stone-700' : 'text-stone-400'}`}>
+                                            {v}
+                                          </td>
+                                        );
+                                      })}
+                                      <td className="px-2 py-1.5 text-right font-medium text-stone-700">{p.total.toLocaleString()}</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              <div className="text-xs text-stone-500">매출 파일에 이 코드({p.code || '코드 없음'})의 상품이 없어 판매량을 표시할 수 없어요.</div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-cream-200 text-stone-600">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">#</th>
+                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">캠페인명</th>
+                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">담당자</th>
+                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">게시일</th>
+                <th className="px-3 py-2 text-right font-medium whitespace-nowrap">상품수</th>
+                <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매칭</th>
+                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">게시 다음날 효율 1위</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedCampaigns.map((c, i) => {
+                const key = 'C' + c.no + c.name;
+                const isOpen = expanded.has(key);
+                return (
+                  <React.Fragment key={key + i}>
+                    <tr className="border-t border-cream-300 hover:bg-cream-100 cursor-pointer" onClick={() => toggleExpand(key)}>
+                      <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
+                      <td className="px-3 py-2 whitespace-nowrap max-w-[280px] truncate" title={c.name}>
+                        <span className="text-stone-400 mr-1">{isOpen ? '▾' : '▸'}</span>{c.name}
+                      </td>
+                      <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{c.manager}</td>
+                      <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{fmtPost(c.postCode)}</td>
+                      <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.productCount}</td>
+                      <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.matchedCount}/{c.productCount}</td>
+                      <td className="px-3 py-2 text-stone-700 whitespace-nowrap max-w-[260px] truncate" title={c.bestName}>
+                        {c.bestName || '—'}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="border-t border-cream-300">
+                        <td colSpan={7} className="p-0 bg-cream-100">
+                          <div className="px-6 py-4">
+                            <div className="text-xs font-medium text-stone-600 mb-2">
+                              {c.name} · 담긴 상품 {c.productCount}개
+                              <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 이 광고에서 게시 다음날 판매가 가장 높았던 상품)</span>
+                            </div>
+                            <div className="flex flex-wrap gap-3">
+                              {c.prods.map((pr, pi) => (
+                                <ProductCard
+                                  key={pi}
+                                  thumbUrl={pr.thumbUrl}
+                                  title={pr.productName}
+                                  sub={pr.code || '코드 없음'}
+                                  nextDaySales={pr.matched ? pr.nextDaySales : null}
+                                  isBest={pr.isBest}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <p className="text-xs text-stone-500 leading-relaxed">
-        광고리스트의 상품과 매출 파일을 상품코드(영문+숫자)로 매칭했어요. '광고 횟수'는 그 상품이 들어간 캠페인 수입니다.
-        상품을 펼치면 광고마다 사용한 이미지를 나란히 비교할 수 있고, 기간별 판매량에 광고 게시일이 ▲로 표시됩니다.
+        광고리스트의 상품과 매출 파일을 상품코드(영문+숫자)로 매칭했어요.
+        {viewMode === 'product'
+          ? ' 상품을 펼치면 광고마다 사용한 이미지를 비교할 수 있고, 게시 다음날 판매가 가장 높았던 광고가 강조됩니다.'
+          : ' 광고를 펼치면 담긴 상품들이 나오고, 그 광고 게시 다음날 판매가 가장 높았던 상품이 강조됩니다.'}
       </p>
     </div>
   );
 };
+
 
 
 const Panel = ({ title, icon: Icon, children }) => (
