@@ -261,6 +261,30 @@ const adText = (v) => {
   return String(v).trim();
 };
 
+const AGE_GROUPS = [
+  { id: '신규', label: '신규', range: '≤14일', test: d => d != null && d <= 14 },
+  { id: '중기', label: '중기', range: '15~60일', test: d => d != null && d > 14 && d <= 60 },
+  { id: '노후', label: '노후', range: '>60일', test: d => d != null && d > 60 },
+];
+
+const ageGroupOf = (days) => {
+  for (const g of AGE_GROUPS) if (g.test(days)) return g.id;
+  return '미상';
+};
+
+const parsePostDate = (postCode, reportEnd) => {
+  if (!postCode || postCode.length !== 4) return null;
+  const mm = parseInt(postCode.slice(0, 2), 10);
+  const dd = parseInt(postCode.slice(2), 10);
+  if (!(mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31)) return null;
+  const end = reportEnd ? new Date(reportEnd) : new Date();
+  if (isNaN(end.getTime())) return null;
+  let year = end.getFullYear();
+  let d = new Date(year, mm - 1, dd);
+  if (d.getTime() > end.getTime()) d = new Date(year - 1, mm - 1, dd);
+  return d;
+};
+
 const parseAdPerformance = async (buf) => {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buf);
@@ -310,19 +334,28 @@ const parseAdPerformance = async (buf) => {
     const impressions = cpm > 0 ? (spend / cpm) * 1000 : 0;
     const clicks = cpc > 0 ? spend / cpc : 0;
     const dateM = name.match(/\((\d{3,4})\)\s*$/);
+    const postCode = dateM ? dateM[1].padStart(4, '0') : '';
+    const reportStart = adText(cell(col.start));
+    const reportEnd = adText(cell(col.end));
+    const postDate = parsePostDate(postCode, reportEnd);
+    const endD = reportEnd ? new Date(reportEnd) : new Date();
+    const ageDays = postDate && !isNaN(endD.getTime())
+      ? Math.max(0, Math.round((endD.getTime() - postDate.getTime()) / 86400000))
+      : null;
 
     campaigns.push({
       name,
       manager: (name.split('_')[0] || '-').trim(),
-      postCode: dateM ? dateM[1].padStart(4, '0') : '',
+      postCode,
+      ageDays,
+      ageGroup: ageGroupOf(ageDays),
       status: adText(cell(col.status)),
       budget: adNum(cell(col.budget)),
       spend, revenue, roas, purchases, carts, cpc, cpm,
       impressions, clicks,
       ctr: impressions > 0 ? clicks / impressions : 0,
       buyRate: carts > 0 ? purchases / carts : 0,
-      reportStart: adText(cell(col.start)),
-      reportEnd: adText(cell(col.end)),
+      reportStart, reportEnd,
     });
   }
   if (campaigns.length === 0) throw new Error('캠페인 데이터가 없습니다.');
@@ -1535,6 +1568,28 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
   const [sortDir, setSortDir] = useState('desc');
   const [targetRoas, setTargetRoas] = useState(3);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [ageFilter, setAgeFilter] = useState('all');
+
+  const ageStats = useMemo(() => {
+    const ids = [...AGE_GROUPS.map(g => g.id), '미상'];
+    return ids.map(id => {
+      const list = campaigns.filter(c => c.ageGroup === id);
+      const spend = list.reduce((s, c) => s + c.spend, 0);
+      const revenue = list.reduce((s, c) => s + c.revenue, 0);
+      const impressions = list.reduce((s, c) => s + c.impressions, 0);
+      const clicks = list.reduce((s, c) => s + c.clicks, 0);
+      const meta = AGE_GROUPS.find(g => g.id === id);
+      return {
+        id,
+        range: meta ? meta.range : '게시일 미상',
+        count: list.length,
+        spend,
+        revenue,
+        roas: spend > 0 ? revenue / spend : 0,
+        ctr: impressions > 0 ? clicks / impressions : 0,
+      };
+    }).filter(s => s.count > 0);
+  }, [campaigns]);
 
   const totals = useMemo(() => {
     const spend = campaigns.reduce((s, c) => s + c.spend, 0);
@@ -1557,7 +1612,9 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
   );
 
   const rows = useMemo(() => {
-    const list = statusFilter === 'all' ? campaigns : campaigns.filter(c => c.status === statusFilter);
+    let list = campaigns;
+    if (statusFilter !== 'all') list = list.filter(c => c.status === statusFilter);
+    if (ageFilter !== 'all') list = list.filter(c => c.ageGroup === ageFilter);
     return [...list].sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];
       let cmp;
@@ -1565,7 +1622,7 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
       else cmp = (av || 0) - (bv || 0);
       return sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [campaigns, sortKey, sortDir, statusFilter]);
+  }, [campaigns, sortKey, sortDir, statusFilter, ageFilter]);
 
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
@@ -1575,10 +1632,25 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
   const period = campaigns[0] ? `${campaigns[0].reportStart} ~ ${campaigns[0].reportEnd}` : '';
   const belowCount = campaigns.filter(c => c.spend > 0 && c.roas < targetRoas).length;
 
+  const fresh = ageStats.find(s => s.id === '신규');
+  const old = ageStats.find(s => s.id === '노후');
+  let fatigueMsg = '';
+  if (fresh && old && fresh.roas > 0) {
+    if (old.roas < fresh.roas * 0.8) {
+      fatigueMsg = `노후 캠페인 ROAS(${old.roas.toFixed(2)})가 신규(${fresh.roas.toFixed(2)}) 대비 낮습니다 — 광고 피로 신호. 오래된 캠페인의 소재 교체를 검토하세요.`;
+    } else if (old.roas >= fresh.roas) {
+      fatigueMsg = `노후 캠페인 ROAS(${old.roas.toFixed(2)})가 신규(${fresh.roas.toFixed(2)}) 이상으로 유지되고 있습니다 — 검증된 캠페인은 계속 운영해도 좋습니다.`;
+    } else {
+      fatigueMsg = `노후 캠페인 ROAS(${old.roas.toFixed(2)})가 신규(${fresh.roas.toFixed(2)})보다 다소 낮습니다 — 추이를 지켜보세요.`;
+    }
+  }
+
   const cols = [
     { key: 'name', label: '캠페인명', align: 'left' },
     { key: 'manager', label: '담당자', align: 'left' },
     { key: 'postCode', label: '게시', align: 'left' },
+    { key: 'ageDays', label: '경과일', align: 'right' },
+    { key: 'ageGroup', label: '나이', align: 'left' },
     { key: 'status', label: '상태', align: 'left' },
     { key: 'spend', label: '지출', align: 'right' },
     { key: 'revenue', label: '매출', align: 'right' },
@@ -1594,6 +1666,8 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
   const cellValue = (c, key) => {
     switch (key) {
       case 'postCode': return c.postCode ? `${c.postCode.slice(0, 2)}/${c.postCode.slice(2)}` : '-';
+      case 'ageDays': return c.ageDays == null ? '-' : `${c.ageDays}일`;
+      case 'ageGroup': return c.ageGroup || '-';
       case 'status': return AD_STATUS_LABEL[c.status] || c.status || '-';
       case 'spend': case 'revenue': case 'cpc': case 'impressions': return fmtWon0(c[key]);
       case 'roas': return (c.roas || 0).toFixed(2);
@@ -1638,6 +1712,59 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
             <div className="text-xl font-medium mt-1">{card.value}</div>
           </div>
         ))}
+      </div>
+
+      <div className="border border-cream-400 bg-cream-50">
+        <div className="px-4 py-2.5 border-b border-cream-300 flex items-center justify-between">
+          <h3 className="text-sm font-medium text-stone-700">광고 나이별 효율 — 게시 후 경과 기간 단위</h3>
+          {ageFilter !== 'all' && (
+            <button
+              onClick={() => setAgeFilter('all')}
+              className="text-xs text-stone-500 hover:text-stone-900 underline underline-offset-2"
+            >
+              필터 해제
+            </button>
+          )}
+        </div>
+        <table className="w-full text-sm">
+          <thead className="text-stone-500">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium">그룹</th>
+              <th className="px-3 py-2 text-right font-medium">캠페인</th>
+              <th className="px-3 py-2 text-right font-medium">지출</th>
+              <th className="px-3 py-2 text-right font-medium">매출</th>
+              <th className="px-3 py-2 text-right font-medium">통합 ROAS</th>
+              <th className="px-3 py-2 text-right font-medium">CTR</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ageStats.map(s => {
+              const sel = ageFilter === s.id;
+              return (
+                <tr
+                  key={s.id}
+                  onClick={() => setAgeFilter(sel ? 'all' : s.id)}
+                  className={`border-t border-cream-300 cursor-pointer ${sel ? 'bg-stone-900 text-cream-50' : 'hover:bg-cream-100'}`}
+                >
+                  <td className="px-4 py-2">
+                    {s.id}{' '}
+                    <span className={sel ? 'text-cream-300' : 'text-stone-400'}>{s.range}</span>
+                  </td>
+                  <td className="px-3 py-2 text-right">{s.count}개</td>
+                  <td className="px-3 py-2 text-right">{fmtWon0(s.spend)}</td>
+                  <td className="px-3 py-2 text-right">{fmtWon0(s.revenue)}</td>
+                  <td className="px-3 py-2 text-right font-medium">{s.roas.toFixed(2)}</td>
+                  <td className="px-3 py-2 text-right">{fmtPct1(s.ctr)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {fatigueMsg && (
+          <p className="px-4 py-2.5 text-xs text-stone-600 border-t border-cream-300 leading-relaxed">
+            {fatigueMsg}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-3 flex-wrap bg-cream-50 border border-cream-400 px-4 py-3">
