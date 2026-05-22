@@ -248,6 +248,87 @@ const parseProductCsv = (text) => {
   return enrichPackageSeasons(groups);
 };
 
+const adNum = (v) => {
+  if (v == null) return 0;
+  if (typeof v === 'object') v = v.result ?? v.text ?? v.richText?.map(t => t.text).join('') ?? '';
+  const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+  return isNaN(n) ? 0 : n;
+};
+
+const adText = (v) => {
+  if (v == null) return '';
+  if (typeof v === 'object') v = v.result ?? v.text ?? v.richText?.map(t => t.text).join('') ?? '';
+  return String(v).trim();
+};
+
+const parseAdPerformance = async (buf) => {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.worksheets[0];
+  if (!ws) throw new Error('시트를 찾을 수 없습니다.');
+
+  const headers = [];
+  const headerRow = ws.getRow(1);
+  const colCount = ws.columnCount || ws.actualColumnCount || 13;
+  for (let c = 1; c <= colCount; c++) headers.push(adText(headerRow.getCell(c).value));
+
+  const findCol = (pred) => headers.findIndex(h => h && pred(h));
+  const col = {
+    name: findCol(h => h.includes('광고 이름') || h.replace(/\s/g, '') === '광고이름'),
+    status: findCol(h => h.includes('게재')),
+    budget: findCol(h => h.includes('예산') && !h.includes('유형')),
+    spend: findCol(h => h.includes('지출')),
+    revenue: findCol(h => h.includes('전환값')),
+    roas: findCol(h => h.toUpperCase().includes('ROAS')),
+    purchases: findCol(h => h === '구매'),
+    carts: findCol(h => h.includes('장바구니')),
+    cpc: findCol(h => h.toUpperCase().includes('CPC')),
+    cpm: findCol(h => h.toUpperCase().includes('CPM')),
+    start: findCol(h => h.includes('보고 시작')),
+    end: findCol(h => h.includes('보고 종료')),
+  };
+  if (col.name < 0) {
+    throw new Error('광고 이름 컬럼을 찾을 수 없습니다. 메타 광고 관리자에서 받은 파일이 맞는지 확인해주세요.');
+  }
+
+  const campaigns = [];
+  const lastRow = ws.rowCount || ws.actualRowCount || 1;
+  for (let r = 2; r <= lastRow; r++) {
+    const row = ws.getRow(r);
+    const cell = (i) => i >= 0 ? row.getCell(i + 1).value : null;
+    const name = adText(cell(col.name));
+    if (!name) continue;
+
+    const spend = adNum(cell(col.spend));
+    const revenue = adNum(cell(col.revenue));
+    const cpc = adNum(cell(col.cpc));
+    const cpm = adNum(cell(col.cpm));
+    const purchases = adNum(cell(col.purchases));
+    const carts = adNum(cell(col.carts));
+    const roasRaw = adNum(cell(col.roas));
+    const roas = roasRaw || (spend > 0 ? revenue / spend : 0);
+    const impressions = cpm > 0 ? (spend / cpm) * 1000 : 0;
+    const clicks = cpc > 0 ? spend / cpc : 0;
+    const dateM = name.match(/\((\d{3,4})\)\s*$/);
+
+    campaigns.push({
+      name,
+      manager: (name.split('_')[0] || '-').trim(),
+      postCode: dateM ? dateM[1].padStart(4, '0') : '',
+      status: adText(cell(col.status)),
+      budget: adNum(cell(col.budget)),
+      spend, revenue, roas, purchases, carts, cpc, cpm,
+      impressions, clicks,
+      ctr: impressions > 0 ? clicks / impressions : 0,
+      buyRate: carts > 0 ? purchases / carts : 0,
+      reportStart: adText(cell(col.start)),
+      reportEnd: adText(cell(col.end)),
+    });
+  }
+  if (campaigns.length === 0) throw new Error('캠페인 데이터가 없습니다.');
+  return campaigns;
+};
+
 const groupByProduct = (skus) => {
   const map = new Map();
   for (const s of skus) {
@@ -859,6 +940,7 @@ const exportAllThemes = async (groups, mode, opts, embedImages, brands, categori
 const App = () => {
   const [skus, setSkus] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
   const [dateLabels, setDateLabels] = useState([]);
   const [fileName, setFileName] = useState('');
   const [mode, setMode] = useState(null);
@@ -922,6 +1004,18 @@ const App = () => {
     setError(null);
     try {
       const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      const isXlsx = bytes[0] === 0x50 && bytes[1] === 0x4B;
+      if (isXlsx) {
+        const parsedCampaigns = await parseAdPerformance(buf);
+        setCampaigns(parsedCampaigns);
+        setSkus([]);
+        setGroups([]);
+        setDateLabels([]);
+        setMode('adperf');
+        setFileName(file.name);
+        return;
+      }
       const decoder = new TextDecoder('euc-kr');
       let text = decoder.decode(buf);
       if (!text.includes('상품명') && !text.includes('<table')) {
@@ -1045,7 +1139,7 @@ const App = () => {
             </h1>
             <p className="text-sm text-stone-600 mt-2 font-light">인스타 메타광고 아이템 선정기</p>
           </div>
-          {fileName && (
+          {fileName && mode !== 'adperf' && (
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex items-center gap-1.5 bg-cream-50 px-3 py-1.5 border border-cream-400">
                 <LucideSearch size={13} className="text-stone-500" />
@@ -1134,7 +1228,17 @@ const App = () => {
           </div>
         )}
 
-        {groups.length === 0 ? (
+        {mode === 'adperf' ? (
+          <AdPerformanceView
+            campaigns={campaigns}
+            fileName={fileName}
+            onReset={() => {
+              setCampaigns([]);
+              setFileName('');
+              setMode(null);
+            }}
+          />
+        ) : groups.length === 0 ? (
           <UploadArea
             onFile={handleFile}
             parsing={parsing}
@@ -1397,16 +1501,17 @@ const UploadArea = ({ onFile, parsing, inputRef }) => {
       }`}
     >
       <LucideUpload size={40} strokeWidth={1.2} className="mx-auto text-stone-500 mb-6" />
-      <h2 className="text-3xl font-medium mb-3 tracking-tight">판매 데이터 파일을 올려주세요</h2>
+      <h2 className="text-3xl font-medium mb-3 tracking-tight">데이터 파일을 올려주세요</h2>
       <p className="text-sm text-stone-600 mb-8 font-light leading-relaxed">
-        <span className="font-medium text-stone-800">stk_forOptSalesInfo .xls</span> (SKU 단위 · 이미지 포함) 또는{' '}
-        <span className="font-medium text-stone-800">sts_prdListStatistics .csv</span> (상품 누적) — 둘 다 자동 인식해요.
+        <span className="font-medium text-stone-800">stk_forOptSalesInfo .xls</span> (SKU 단위 · 이미지 포함) ·{' '}
+        <span className="font-medium text-stone-800">sts_prdListStatistics .csv</span> (상품 누적) ·{' '}
+        <span className="font-medium text-stone-800">메타 광고 성과 .xlsx</span> — 세 형식 모두 자동 인식해요.
         <br />파일을 끌어다 놓거나 아래 버튼으로 선택하세요. 데이터는 브라우저에서만 처리됩니다.
       </p>
       <input
         ref={inputRef}
         type="file"
-        accept=".xls,.html,.htm,.csv"
+        accept=".xls,.xlsx,.html,.htm,.csv"
         className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }}
       />
@@ -1417,6 +1522,203 @@ const UploadArea = ({ onFile, parsing, inputRef }) => {
       >
         {parsing ? '파싱 중...' : '파일 선택'}
       </button>
+    </div>
+  );
+};
+
+const AD_STATUS_LABEL = { active: '게재중', inactive: '꺼짐', not_delivering: '미게재', paused: '일시중지' };
+const fmtWon0 = (n) => Math.round(n || 0).toLocaleString();
+const fmtPct1 = (n) => `${((n || 0) * 100).toFixed(1)}%`;
+
+const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
+  const [sortKey, setSortKey] = useState('roas');
+  const [sortDir, setSortDir] = useState('desc');
+  const [targetRoas, setTargetRoas] = useState(3);
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  const totals = useMemo(() => {
+    const spend = campaigns.reduce((s, c) => s + c.spend, 0);
+    const revenue = campaigns.reduce((s, c) => s + c.revenue, 0);
+    const purchases = campaigns.reduce((s, c) => s + c.purchases, 0);
+    const carts = campaigns.reduce((s, c) => s + c.carts, 0);
+    const impressions = campaigns.reduce((s, c) => s + c.impressions, 0);
+    const clicks = campaigns.reduce((s, c) => s + c.clicks, 0);
+    return {
+      spend, revenue, purchases, carts,
+      roas: spend > 0 ? revenue / spend : 0,
+      buyRate: carts > 0 ? purchases / carts : 0,
+      ctr: impressions > 0 ? clicks / impressions : 0,
+    };
+  }, [campaigns]);
+
+  const statuses = useMemo(
+    () => ['all', ...Array.from(new Set(campaigns.map(c => c.status).filter(Boolean)))],
+    [campaigns]
+  );
+
+  const rows = useMemo(() => {
+    const list = statusFilter === 'all' ? campaigns : campaigns.filter(c => c.status === statusFilter);
+    return [...list].sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      let cmp;
+      if (typeof av === 'string' || typeof bv === 'string') cmp = String(av).localeCompare(String(bv));
+      else cmp = (av || 0) - (bv || 0);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [campaigns, sortKey, sortDir, statusFilter]);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  const period = campaigns[0] ? `${campaigns[0].reportStart} ~ ${campaigns[0].reportEnd}` : '';
+  const belowCount = campaigns.filter(c => c.spend > 0 && c.roas < targetRoas).length;
+
+  const cols = [
+    { key: 'name', label: '캠페인명', align: 'left' },
+    { key: 'manager', label: '담당자', align: 'left' },
+    { key: 'postCode', label: '게시', align: 'left' },
+    { key: 'status', label: '상태', align: 'left' },
+    { key: 'spend', label: '지출', align: 'right' },
+    { key: 'revenue', label: '매출', align: 'right' },
+    { key: 'roas', label: 'ROAS', align: 'right' },
+    { key: 'purchases', label: '구매', align: 'right' },
+    { key: 'carts', label: '장바구니', align: 'right' },
+    { key: 'buyRate', label: '구매전환', align: 'right' },
+    { key: 'cpc', label: 'CPC', align: 'right' },
+    { key: 'impressions', label: '노출(역산)', align: 'right' },
+    { key: 'ctr', label: 'CTR', align: 'right' },
+  ];
+
+  const cellValue = (c, key) => {
+    switch (key) {
+      case 'postCode': return c.postCode ? `${c.postCode.slice(0, 2)}/${c.postCode.slice(2)}` : '-';
+      case 'status': return AD_STATUS_LABEL[c.status] || c.status || '-';
+      case 'spend': case 'revenue': case 'cpc': case 'impressions': return fmtWon0(c[key]);
+      case 'roas': return (c.roas || 0).toFixed(2);
+      case 'buyRate': case 'ctr': return fmtPct1(c[key]);
+      case 'purchases': case 'carts': return (c[key] || 0).toLocaleString();
+      default: return c[key] || '-';
+    }
+  };
+
+  const summaryCards = [
+    { label: '총 광고비', value: `${fmtWon0(totals.spend)}원` },
+    { label: '총 매출', value: `${fmtWon0(totals.revenue)}원` },
+    { label: '통합 ROAS', value: totals.roas.toFixed(2), hi: true },
+    { label: '총 구매', value: `${totals.purchases.toLocaleString()}건` },
+    { label: '장바구니→구매', value: fmtPct1(totals.buyRate) },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-2xl font-medium tracking-tight">메타 광고 성과</h2>
+          <p className="text-xs text-stone-500 mt-1">
+            {fileName} · 기간 {period} · 캠페인 {campaigns.length}개
+          </p>
+        </div>
+        <button
+          onClick={onReset}
+          className="text-sm text-stone-500 hover:text-stone-900 underline underline-offset-2"
+        >
+          다른 파일 불러오기
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {summaryCards.map(card => (
+          <div
+            key={card.label}
+            className={`p-4 border ${card.hi ? 'bg-stone-900 text-cream-50 border-stone-900' : 'bg-cream-50 border-cream-400'}`}
+          >
+            <div className={`text-xs ${card.hi ? 'text-cream-300' : 'text-stone-500'}`}>{card.label}</div>
+            <div className="text-xl font-medium mt-1">{card.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap bg-cream-50 border border-cream-400 px-4 py-3">
+        <label className="text-sm text-stone-700">목표 ROAS</label>
+        <input
+          type="number"
+          min="0"
+          step="0.1"
+          value={targetRoas}
+          onChange={e => setTargetRoas(parseFloat(e.target.value) || 0)}
+          className="w-20 px-2 py-1 text-sm border border-cream-400 bg-cream-100"
+        />
+        <span className="text-sm text-stone-600">
+          미만 캠페인 <span className="font-medium text-rose-700">{belowCount}개</span> — 소재 교체·예산 재배분 검토 대상
+        </span>
+        <div className="ml-auto flex items-center gap-1">
+          <span className="text-xs text-stone-500 mr-1">상태</span>
+          {statuses.map(s => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className={`px-2 py-0.5 text-xs border transition ${
+                statusFilter === s
+                  ? 'bg-stone-900 text-cream-50 border-stone-900'
+                  : 'bg-cream-50 text-stone-700 border-cream-400 hover:border-stone-700'
+              }`}
+            >
+              {s === 'all' ? '전체' : (AD_STATUS_LABEL[s] || s)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-cream-200 text-stone-600">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">#</th>
+              {cols.map(col => (
+                <th
+                  key={col.key}
+                  onClick={() => toggleSort(col.key)}
+                  className={`px-3 py-2 font-medium whitespace-nowrap cursor-pointer hover:text-stone-900 ${
+                    col.align === 'right' ? 'text-right' : 'text-left'
+                  }`}
+                >
+                  {col.label}{sortKey === col.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((c, i) => {
+              const below = c.spend > 0 && c.roas < targetRoas;
+              return (
+                <tr key={c.name + i} className="border-t border-cream-300 hover:bg-cream-100">
+                  <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
+                  {cols.map(col => (
+                    <td
+                      key={col.key}
+                      title={col.key === 'name' ? c.name : undefined}
+                      className={`px-3 py-2 whitespace-nowrap ${col.align === 'right' ? 'text-right' : 'text-left'} ${
+                        col.key === 'roas'
+                          ? (below ? 'text-rose-700 font-medium' : 'font-medium')
+                          : 'text-stone-700'
+                      } ${col.key === 'name' ? 'max-w-[260px] truncate' : ''}`}
+                    >
+                      {cellValue(c, col.key)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="text-xs text-stone-500 leading-relaxed">
+        노출·클릭은 CPM·CPC로 역산한 추정치예요. ROAS는 게시 직후 지출이 적은 캠페인일수록 변동이 크니,
+        지출 규모를 함께 보고 판단하세요.
+      </p>
     </div>
   );
 };
