@@ -402,22 +402,23 @@ const parseAdListXlsx = async (zip) => {
         status: (cells['C'] || '').trim(),
         postCode: pm ? pm[1].padStart(4, '0') : '',
         products: [],
-        thumbVm: cellVm['H'] || cellVm['D'] || null,
-        thumbUrl: null,
       };
       campaigns.push(cur);
     }
     if (cur && prod) {
       const codes = prod.match(/[A-Z]{3,5}\d{3,5}/g) || [];
-      cur.products.push({ raw: prod, codes });
+      // H열 = 그 상품 행의 광고 이미지 (행 단위로 G상품·H이미지가 짝)
+      cur.products.push({ raw: prod, codes, thumbVm: cellVm['H'] || null, thumbUrl: null });
     }
   }
 
   if (vmToMedia) {
     for (const c of campaigns) {
-      if (c.thumbVm) {
-        const mp = vmToMedia(c.thumbVm);
-        c.thumbUrl = await mediaUrl(mp);
+      for (const p of c.products) {
+        if (p.thumbVm) {
+          const mp = vmToMedia(p.thumbVm);
+          p.thumbUrl = await mediaUrl(mp);
+        }
       }
     }
   }
@@ -2423,7 +2424,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
           if (!prod.campaigns.some(c => c.no === camp.no && c.name === camp.name)) {
             prod.campaigns.push({
               no: camp.no, name: camp.name, manager: camp.manager,
-              postCode: camp.postCode, thumbUrl: camp.thumbUrl || null,
+              postCode: camp.postCode, thumbUrl: p.thumbUrl || null,
             });
           }
         }
@@ -2486,7 +2487,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
   const period = dateLabels.length ? `${dateLabels[0]} ~ ${dateLabels[dateLabels.length - 1]}` : '';
   const fmtPost = (pc) => pc ? `${pc.slice(0, 2)}/${pc.slice(2)}` : '-';
   const matchedCount = products.filter(p => p.matched).length;
-  const hasThumb = adList.some(c => c.thumbUrl);
+  const hasThumb = adList.some(c => c.products.some(p => p.thumbUrl));
 
   return (
     <div className="space-y-5">
