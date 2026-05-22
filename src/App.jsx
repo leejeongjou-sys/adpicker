@@ -2211,9 +2211,25 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
 
 const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset }) => {
   const [showPrev, setShowPrev] = useState(false);
+  const [periodMode, setPeriodMode] = useState('day');
   const [expanded, setExpanded] = useState(() => new Set());
   const [sortKey, setSortKey] = useState('totalSales');
   const [sortDir, setSortDir] = useState('desc');
+
+  const periods = useMemo(() => {
+    if (periodMode === 'day') {
+      return dateLabels.map((d, i) => ({ label: d.slice(5).replace('-', '/'), idx: [i], start: d }));
+    }
+    const out = [];
+    for (let i = 0; i < dateLabels.length; i += 7) {
+      const idx = [];
+      for (let j = i; j < Math.min(i + 7, dateLabels.length); j++) idx.push(j);
+      const s = dateLabels[i].slice(5).replace('-', '/');
+      const e = dateLabels[Math.min(i + 6, dateLabels.length - 1)].slice(5).replace('-', '/');
+      out.push({ label: `${s}~${e}`, idx, start: dateLabels[i] });
+    }
+    return out;
+  }, [periodMode, dateLabels]);
 
   const codeMap = useMemo(() => {
     const m = new Map();
@@ -2246,23 +2262,23 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
       const prods = camp.products.map(p => {
         const gs = p.codes.map(c => codeMap.get(c)).filter(Boolean);
         const matched = gs.length > 0;
-        let total = 0, prevSum = 0, postSum = 0;
+        const daily = new Array(dateLabels.length).fill(0);
         for (const g of gs) {
-          const daily = dailyOf(g);
-          total += daily.reduce((a, b) => a + b, 0);
-          prevSum += prevIdx.reduce((a, i) => a + daily[i], 0);
-          postSum += postIdx.reduce((a, i) => a + daily[i], 0);
+          const d = dailyOf(g);
+          for (let i = 0; i < d.length; i++) daily[i] += d[i];
         }
+        const total = daily.reduce((a, b) => a + b, 0);
+        const prevSum = prevIdx.reduce((a, i) => a + daily[i], 0);
+        const postSum = postIdx.reduce((a, i) => a + daily[i], 0);
         return {
-          raw: p.raw, codes: p.codes, matched,
-          total,
+          raw: p.raw, codes: p.codes, matched, total, daily,
           prevAvg: prevIdx.length > 0 ? prevSum / prevIdx.length : null,
           postAvg: postIdx.length > 0 ? postSum / postIdx.length : null,
         };
       });
       return {
         no: camp.no, name: camp.name, manager: camp.manager,
-        postCode: camp.postCode, status: camp.status,
+        postCode: camp.postCode, status: camp.status, postDate,
         prevDays: prevIdx.length, postDays: postIdx.length,
         prods,
         productCount: prods.length,
@@ -2319,7 +2335,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
         </button>
       </div>
 
-      <div className="flex items-center gap-3 bg-cream-50 border border-cream-400 px-4 py-3">
+      <div className="flex items-center gap-3 bg-cream-50 border border-cream-400 px-4 py-3 flex-wrap">
         <button
           onClick={() => setShowPrev(v => !v)}
           className={`px-3 py-1.5 text-sm border transition ${
@@ -2330,8 +2346,24 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
         >
           게시 전 비교 {showPrev ? 'ON' : 'OFF'}
         </button>
+        <div className="flex items-center border border-cream-400">
+          <span className="px-2 text-xs text-stone-500">기간 단위</span>
+          {[['day', '일별'], ['week', '주별']].map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setPeriodMode(v)}
+              className={`px-3 py-1.5 text-sm transition ${
+                periodMode === v
+                  ? 'bg-stone-900 text-cream-50'
+                  : 'bg-cream-50 text-stone-700 hover:bg-cream-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <span className="text-xs text-stone-500 leading-relaxed">
-          켜면 캠페인 게시일 기준 게시 전·후 일평균 판매를 함께 표시합니다. 게시일이 매출 데이터 기간보다 이르면 게시 전은 '—'로 표시돼요.
+          캠페인을 펼치면 상품별 {periodMode === 'day' ? '일별' : '주별'} 판매량이 표시됩니다. 게시일 이후 구간은 음영으로 강조돼요.
         </span>
       </div>
 
@@ -2382,31 +2414,46 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
                   {isOpen && (
                     <tr className="border-t border-cream-300">
                       <td colSpan={showPrev ? 9 : 7} className="p-0 bg-cream-100">
-                        <div className="px-6 py-3">
+                        <div className="px-6 py-3 overflow-x-auto">
                           <div className="text-xs font-medium text-stone-600 mb-2">
-                            {c.name} · 상품 {c.productCount}개 · 게시 {fmtPost(c.postCode)}
-                            {showPrev && ` · 게시전 ${c.prevDays}일 / 게시후 ${c.postDays}일`}
+                            {c.name} · 상품 {c.productCount}개 · 게시 {fmtPost(c.postCode)} · {periodMode === 'day' ? '일별' : '주별'} 판매
+                            <span className="text-stone-400 font-normal"> (음영 = 게시일 이후 구간)</span>
                           </div>
-                          <table className="w-full text-xs">
+                          <table className="text-xs">
                             <thead className="text-stone-500">
                               <tr>
-                                <th className="px-2 py-1.5 text-left font-medium">상품</th>
-                                <th className="px-2 py-1.5 text-left font-medium">코드</th>
-                                <th className="px-2 py-1.5 text-right font-medium">기간 판매</th>
-                                {showPrev && <th className="px-2 py-1.5 text-right font-medium">게시전 일평균</th>}
-                                {showPrev && <th className="px-2 py-1.5 text-right font-medium">게시후 일평균</th>}
+                                <th className="px-2 py-1.5 text-left font-medium sticky left-0 bg-cream-100 z-10">상품</th>
+                                <th className="px-2 py-1.5 text-left font-medium whitespace-nowrap">코드</th>
+                                {periods.map((pd, idx) => {
+                                  const isPost = c.postDate && new Date(pd.start) >= c.postDate;
+                                  return (
+                                    <th key={idx} className={`px-2 py-1.5 text-right font-medium whitespace-nowrap ${isPost ? 'bg-cream-400 text-stone-800' : ''}`}>
+                                      {pd.label}
+                                    </th>
+                                  );
+                                })}
+                                <th className="px-2 py-1.5 text-right font-medium">합계</th>
                               </tr>
                             </thead>
                             <tbody>
                               {c.prods.map((p, pi) => (
                                 <tr key={pi} className="border-t border-cream-300">
-                                  <td className="px-2 py-1.5 text-stone-700">{p.raw}</td>
-                                  <td className="px-2 py-1.5 text-stone-500">
+                                  <td className="px-2 py-1.5 text-stone-700 whitespace-nowrap sticky left-0 bg-cream-100 z-10">{p.raw}</td>
+                                  <td className="px-2 py-1.5 text-stone-500 whitespace-nowrap">
                                     {p.matched ? p.codes.join(', ') : <span className="text-rose-600">미매칭</span>}
                                   </td>
-                                  <td className="px-2 py-1.5 text-right text-stone-600">{p.matched ? p.total.toLocaleString() : '—'}</td>
-                                  {showPrev && <td className="px-2 py-1.5 text-right text-stone-600">{p.matched ? fmtAvg(p.prevAvg) : '—'}</td>}
-                                  {showPrev && <td className="px-2 py-1.5 text-right text-stone-600">{p.matched ? fmtAvg(p.postAvg) : '—'}</td>}
+                                  {periods.map((pd, idx) => {
+                                    const isPost = c.postDate && new Date(pd.start) >= c.postDate;
+                                    const v = p.matched ? pd.idx.reduce((a, di) => a + (p.daily[di] || 0), 0) : null;
+                                    return (
+                                      <td key={idx} className={`px-2 py-1.5 text-right whitespace-nowrap ${isPost ? 'bg-cream-300' : ''} ${v ? 'text-stone-700' : 'text-stone-400'}`}>
+                                        {v == null ? '—' : v}
+                                      </td>
+                                    );
+                                  })}
+                                  <td className="px-2 py-1.5 text-right font-medium text-stone-700 whitespace-nowrap">
+                                    {p.matched ? p.total.toLocaleString() : '—'}
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
@@ -2424,7 +2471,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
 
       <p className="text-xs text-stone-500 leading-relaxed">
         광고리스트의 상품과 매출 파일을 상품코드(영문+숫자)로 매칭했어요. '미매칭'은 매출 파일에 같은 코드의 상품이 없는 경우입니다.
-        '게시 전 비교'를 켜면 캠페인 게시일 기준으로 게시 전·후 일평균 판매가 나뉘어 표시됩니다.
+        캠페인을 펼치면 상품별 일별/주별 판매량이 나오고, 게시일 이후 구간은 음영으로 표시됩니다.
+        '게시 전 비교'를 켜면 캠페인 행에 게시 전·후 일평균 판매가 함께 표시됩니다.
       </p>
     </div>
   );
