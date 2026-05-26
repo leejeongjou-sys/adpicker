@@ -2777,6 +2777,26 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
     };
   }, [campaignRows, hasPerf, codeMap]);
 
+  const noAdProducts = useMemo(() => {
+    if (!adList || groups.length === 0) return [];
+    const adCodes = new Set();
+    for (const camp of adList) {
+      for (const p of camp.products) {
+        for (const code of (p.codes || [])) adCodes.add(code);
+      }
+    }
+    const EXCLUDED = new Set(['기타', '미분류']);
+    return groups
+      .filter(g => {
+        if (EXCLUDED.has(g.category)) return false;
+        if ((g.totalSales || 0) <= 0) return false;
+        const code = extractProductCode(g.productName);
+        return code && !adCodes.has(code);
+      })
+      .sort((a, b) => (b.totalSales || 0) - (a.totalSales || 0))
+      .slice(0, 8);
+  }, [groups, adList]);
+
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(k); setSortDir('desc'); }
@@ -2901,6 +2921,35 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
       </div>
 
       {viewMode === 'product' ? (
+        <>
+        {noAdProducts.length > 0 && (
+          <div className="bg-cream-50 border border-cream-400 px-4 py-3">
+            <div className="flex items-baseline gap-2 flex-wrap mb-2">
+              <h3 className="text-sm font-medium text-stone-800">광고 안 들어간 베스트 {noAdProducts.length}개</h3>
+              <span className="text-xs text-stone-500">기간 판매량 기준 · 광고 추가 검토 후보</span>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {noAdProducts.map((g, i) => (
+                <div key={i} className="w-44 border border-cream-400 bg-cream-100">
+                  <div className="w-full h-32 bg-cream-200 overflow-hidden flex items-center justify-center">
+                    {g.imageUrl && g.imageUrl !== '이미지없음' ? (
+                      <img src={g.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
+                    ) : (
+                      <span className="text-xs text-stone-400">이미지 없음</span>
+                    )}
+                  </div>
+                  <div className="px-2 py-1.5">
+                    <div className="text-xs font-medium text-stone-700 truncate" title={g.productName}>{g.productName}</div>
+                    <div className="text-[11px] text-stone-500 mt-0.5">{extractProductCode(g.productName) || '-'}</div>
+                    <div className="text-[11px] mt-0.5 text-stone-700 font-medium">
+                      기간 판매 {(g.totalSales || 0).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-cream-200 text-stone-600">
@@ -3060,6 +3109,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
             </tbody>
           </table>
         </div>
+        </>
       ) : (
         <div className="space-y-3">
           {hasPerf && (
