@@ -1991,6 +1991,22 @@ const UploadArea = ({ onFile, parsing, inputRef, adList, adListName, onClearAdLi
 };
 
 const AD_STATUS_LABEL = { active: '게재중', inactive: '꺼짐', not_delivering: '미게재', paused: '일시중지' };
+
+const TERM_DESC = {
+  ROAS: 'Return On Ad Spend — 광고비 대비 매출 비율. 예: ROAS 4 = 광고비 1원당 매출 4원. 광고 효율의 핵심 지표.',
+  CPC: 'Cost Per Click — 광고 클릭 1회당 평균 비용. 낮을수록 클릭 효율 좋음.',
+  CPM: 'Cost Per Mille — 노출 1,000회당 비용. 도달 단가 지표.',
+  CTR: 'Click-Through Rate — 노출 대비 클릭률 (클릭 / 노출). 광고 소재 매력도 지표.',
+};
+
+const InfoTerm = ({ term, children }) => (
+  <span
+    title={TERM_DESC[term] || ''}
+    className="cursor-help decoration-dotted underline decoration-stone-400 underline-offset-2"
+  >
+    {children || term}
+  </span>
+);
 const fmtWon0 = (n) => Math.round(n || 0).toLocaleString();
 const fmtPct1 = (n) => `${((n || 0) * 100).toFixed(1)}%`;
 
@@ -2105,8 +2121,8 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
         { key: 'spend', label: '지출', align: 'right' },
         { key: 'impressions', label: '노출', align: 'right' },
         { key: 'clicks', label: '링크클릭', align: 'right' },
-        { key: 'ctr', label: 'CTR', align: 'right' },
-        { key: 'cpc', label: 'CPC', align: 'right' },
+        { key: 'ctr', label: 'CTR', align: 'right', term: 'CTR' },
+        { key: 'cpc', label: 'CPC', align: 'right', term: 'CPC' },
       ]
     : [
         { key: 'name', label: '캠페인명', align: 'left' },
@@ -2117,13 +2133,13 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
         { key: 'status', label: '상태', align: 'left' },
         { key: 'spend', label: '지출', align: 'right' },
         { key: 'revenue', label: '매출', align: 'right' },
-        { key: 'roas', label: 'ROAS', align: 'right' },
+        { key: 'roas', label: 'ROAS', align: 'right', term: 'ROAS' },
         { key: 'purchases', label: '구매', align: 'right' },
         { key: 'carts', label: '장바구니', align: 'right' },
         { key: 'buyRate', label: '구매전환', align: 'right' },
-        { key: 'cpc', label: 'CPC', align: 'right' },
+        { key: 'cpc', label: 'CPC', align: 'right', term: 'CPC' },
         { key: 'impressions', label: '노출(역산)', align: 'right' },
-        { key: 'ctr', label: 'CTR', align: 'right' },
+        { key: 'ctr', label: 'CTR', align: 'right', term: 'CTR' },
       ];
 
   const cellValue = (c, key) => {
@@ -2305,7 +2321,7 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
                     col.align === 'right' ? 'text-right' : 'text-left'
                   }`}
                 >
-                  {col.label}{sortKey === col.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                  {col.term ? <InfoTerm term={col.term}>{col.label}</InfoTerm> : col.label}{sortKey === col.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
               ))}
             </tr>
@@ -2628,7 +2644,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         </div>
         {hasPerf && (
           <div className={`text-[11px] mt-0.5 ${isBestRoas ? 'text-amber-700 font-medium' : 'text-stone-500'}`}>
-            ROAS {roas == null ? '—' : roas.toFixed(2)}{isBestRoas ? ' ★' : ''}
+            <InfoTerm term="ROAS" /> {roas == null ? '—' : roas.toFixed(2)}{isBestRoas ? ' ★' : ''}
           </div>
         )}
       </div>
@@ -2856,7 +2872,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                 <th className="px-3 py-2 text-left font-medium whitespace-nowrap">게시일</th>
                 <th className="px-3 py-2 text-right font-medium whitespace-nowrap">상품수</th>
                 <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매칭</th>
-                {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">ROAS</th>}
+                {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap"><InfoTerm term="ROAS" /></th>}
                 {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매출</th>}
                 {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">구매</th>}
                 <th className="px-3 py-2 text-left font-medium whitespace-nowrap">게시 다음날 효율 1위</th>
