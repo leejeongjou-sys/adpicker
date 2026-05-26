@@ -1709,6 +1709,8 @@ const App = () => {
             adList={adList}
             adListName={adListName}
             onClearAdList={() => { setAdList(null); setAdListName(''); }}
+            apiKey={apiKey}
+            saveApiKey={saveApiKey}
           />
         ) : (
           <div className="grid grid-cols-12 gap-6">
@@ -1950,7 +1952,7 @@ const ThemeSelectorModal = ({
   );
 };
 
-const UploadArea = ({ onFile, parsing, inputRef, adList, adListName, onClearAdList }) => {
+const UploadArea = ({ onFile, parsing, inputRef, adList, adListName, onClearAdList, apiKey, saveApiKey }) => {
   const [drag, setDrag] = useState(false);
   return (
     <div className="space-y-4">
@@ -2010,6 +2012,28 @@ const UploadArea = ({ onFile, parsing, inputRef, adList, adListName, onClearAdLi
         >
           {parsing ? '파싱 중...' : '파일 선택 (여러 개 가능)'}
         </button>
+      </div>
+      <div className="bg-cream-50 border border-cream-400 px-4 py-3">
+        <details>
+          <summary className="text-xs text-stone-600 cursor-pointer hover:text-stone-900 flex items-center gap-1.5 select-none">
+            <LucideKey size={12} />
+            Gemini API 키 {apiKey ? <span className="text-emerald-700">(저장됨 ✓)</span> : <span className="text-stone-500">— AI 기능에 필요 (선택)</span>}
+          </summary>
+          <div className="mt-2 space-y-2">
+            <input
+              type="password"
+              value={apiKey || ''}
+              onChange={e => saveApiKey(e.target.value)}
+              placeholder="AIzaSy..."
+              className="w-full px-2 py-1.5 text-xs border border-cream-400 bg-cream-100 focus:outline-none focus:border-stone-700"
+            />
+            <p className="text-xs text-stone-500 leading-snug">
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline">aistudio.google.com</a>에서 무료 발급.
+              {' '}<span className="font-medium">광고세트 만들기의 문구·타겟 자동 생성</span>과 <span className="font-medium">"직접 입력" 주제(자연어 추출)</span>에 사용됩니다.
+              키는 사용자 브라우저에만 저장되고 어디에도 전송되지 않습니다.
+            </p>
+          </div>
+        </details>
       </div>
     </div>
   );
