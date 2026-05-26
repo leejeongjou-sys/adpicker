@@ -2016,6 +2016,45 @@ const UploadArea = ({ onFile, parsing, inputRef, adList, adListName, onClearAdLi
 
 const AD_STATUS_LABEL = { active: '게재중', inactive: '꺼짐', not_delivering: '미게재', paused: '일시중지' };
 
+// 한국 공휴일 (대체공휴일 포함). 데이터 기간에 해당하는 연도를 커버.
+const KR_HOLIDAYS = new Set([
+  // 2025
+  '2025-01-01',
+  '2025-01-28', '2025-01-29', '2025-01-30',
+  '2025-03-01', '2025-03-03',
+  '2025-05-05', '2025-05-06',
+  '2025-06-06',
+  '2025-08-15',
+  '2025-10-03', '2025-10-05', '2025-10-06', '2025-10-07', '2025-10-08',
+  '2025-10-09',
+  '2025-12-25',
+  // 2026
+  '2026-01-01',
+  '2026-02-16', '2026-02-17', '2026-02-18',
+  '2026-03-01', '2026-03-02',
+  '2026-05-05',
+  '2026-05-24', '2026-05-25',
+  '2026-06-06',
+  '2026-08-15', '2026-08-17',
+  '2026-09-24', '2026-09-25', '2026-09-26',
+  '2026-10-03', '2026-10-05',
+  '2026-10-09',
+  '2026-12-25',
+]);
+
+const isoLocalDate = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+};
+
+const isBusinessDay = (d) => {
+  const dow = d.getDay();
+  if (dow === 0 || dow === 6) return false;
+  return !KR_HOLIDAYS.has(isoLocalDate(d));
+};
+
 const TERM_DESC = {
   ROAS: 'Return On Ad Spend — 광고비 대비 매출 비율. 예: ROAS 4 = 광고비 1원당 매출 4원. 광고 효율의 핵심 지표.',
   CPC: 'Cost Per Click — 광고 클릭 1회당 평균 비용. 낮을수록 클릭 효율 좋음.',
@@ -2488,6 +2527,21 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
     return dateLabels.findIndex(d => d.slice(5).replace('-', '/') === md);
   };
 
+  const nextBizIdxOf = (postCode) => {
+    if (!postCode) return -1;
+    const reportEnd = dateLabels[dateLabels.length - 1] || '';
+    const pd = parsePostDate(postCode, reportEnd);
+    if (!pd) return -1;
+    const cur = new Date(pd);
+    cur.setDate(cur.getDate() + 1);
+    let guard = 0;
+    while (!isBusinessDay(cur) && guard < 14) {
+      cur.setDate(cur.getDate() + 1);
+      guard++;
+    }
+    return dateLabels.indexOf(isoLocalDate(cur));
+  };
+
   // 상품 중심
   const products = useMemo(() => {
     const pm = new Map();
@@ -2524,8 +2578,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
       const campWithEffect = sortedCamps.map(c => {
         let nextDaySales = null;
         if (g) {
-          const pi = postIdxOf(c.postCode);
-          if (pi >= 0 && pi + 1 < len) nextDaySales = daily[pi + 1];
+          const nbi = nextBizIdxOf(c.postCode);
+          if (nbi >= 0 && nbi < len) nextDaySales = daily[nbi];
         }
         const perf = perfMap.get(c.name);
         return {
@@ -2581,6 +2635,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
     const endDate = reportEnd ? new Date(reportEnd) : new Date();
     return adList.map(camp => {
       const pi = postIdxOf(camp.postCode);
+      const nbi = nextBizIdxOf(camp.postCode);
       const postDate = parsePostDate(camp.postCode, reportEnd);
       const ageDays = postDate && !isNaN(endDate.getTime())
         ? Math.max(0, Math.round((endDate.getTime() - postDate.getTime()) / 86400000))
@@ -2596,7 +2651,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
           total = daily.reduce((a, b) => a + b, 0);
           productName = g.productName;
           imageUrl = g.imageUrl;
-          if (pi >= 0 && pi + 1 < len) nextDaySales = daily[pi + 1];
+          if (nbi >= 0 && nbi < len) nextDaySales = daily[nbi];
         }
         return {
           raw: p.raw, code, codes: p.codes, thumbUrl: p.thumbUrl || null,
@@ -2757,7 +2812,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         <div className="text-xs font-medium text-stone-700 truncate" title={title}>{title}</div>
         <div className="text-[11px] text-stone-500 mt-0.5">{sub}</div>
         <div className={`text-[11px] mt-0.5 ${isBest ? 'text-stone-900 font-medium' : 'text-stone-500'}`}>
-          게시 다음날 판매 {nextDaySales == null ? '—' : nextDaySales}
+          다음 영업일 판매 {nextDaySales == null ? '—' : nextDaySales}
         </div>
         {hasPerf && (
           <div className={`text-[11px] mt-0.5 ${isBestRoas ? 'text-amber-700 font-medium' : 'text-stone-500'}`}>
@@ -2841,7 +2896,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         <span className="text-xs text-stone-500">
           {viewMode === 'product'
             ? '상품을 클릭하면 그 상품을 쓴 광고 이미지들과 기간별 판매가 펼쳐집니다.'
-            : '광고를 클릭하면 그 광고에 담긴 상품들이 펼쳐지고, 게시 다음날 판매가 가장 높은 상품이 강조됩니다.'}
+            : '광고를 클릭하면 그 광고에 담긴 상품들이 펼쳐지고, 다음 영업일 판매가 가장 높은 상품이 강조됩니다.'}
         </span>
       </div>
 
@@ -2862,15 +2917,15 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                 <th onClick={() => toggleSort('total')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
                   기간 판매{sortKey === 'total' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
-                <th onClick={() => toggleSort('nextDayMax')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 게시 다음날 판매 중 최댓값">
-                  광고 다음날 최다{sortKey === 'nextDayMax' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                <th onClick={() => toggleSort('nextDayMax')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 다음 영업일 판매 중 최댓값 (한국 영업일 기준)">
+                  다음 영업일 최다{sortKey === 'nextDayMax' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
                 {hasPerf && (
                   <th onClick={() => toggleSort('maxRoas')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 ROAS 중 최댓값">
                     최고 ROAS{sortKey === 'maxRoas' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                   </th>
                 )}
-                <th onClick={() => toggleSort('strengthStars')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="광고 다음날 판매 + 최고 ROAS 종합 판단">
+                <th onClick={() => toggleSort('strengthStars')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="다음 영업일 판매 + 최고 ROAS 종합 판단">
                   광고 추천{sortKey === 'strengthStars' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
               </tr>
@@ -2936,7 +2991,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                             <div>
                               <div className="text-xs font-medium text-stone-600 mb-2">
                                 이 상품이 들어간 광고 {p.campaigns.length}개 — 광고별 사용 이미지
-                                <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 게시 다음날 판매가 가장 높았던 광고)</span>
+                                <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 다음 영업일 판매가 가장 높았던 광고)</span>
                               </div>
                               <div className="flex flex-wrap gap-3">
                                 {p.campaigns.map((c, ci) => (
@@ -3163,7 +3218,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                           <div className="px-6 py-4">
                             <div className="text-xs font-medium text-stone-600 mb-2">
                               {c.name} · 담긴 상품 {c.productCount}개
-                              <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 이 광고에서 게시 다음날 판매가 가장 높았던 상품)</span>
+                              <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 이 광고에서 다음 영업일 판매가 가장 높았던 상품)</span>
                             </div>
                             <div className="flex flex-wrap gap-3">
                               {c.prods.map((pr, pi) => (
@@ -3193,8 +3248,9 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
       <p className="text-xs text-stone-500 leading-relaxed">
         광고리스트의 상품과 매출 파일을 상품코드(영문+숫자)로 매칭했어요.
         {viewMode === 'product'
-          ? ' 상품을 펼치면 광고마다 사용한 이미지를 비교할 수 있고, 게시 다음날 판매가 가장 높았던 광고가 강조됩니다.'
-          : ' 광고를 펼치면 담긴 상품들이 나오고, 그 광고 게시 다음날 판매가 가장 높았던 상품이 강조됩니다.'}
+          ? ' 상품을 펼치면 광고마다 사용한 이미지를 비교할 수 있고, 다음 영업일 판매가 가장 높았던 광고가 강조됩니다.'
+          : ' 광고를 펼치면 담긴 상품들이 나오고, 그 광고 다음 영업일 판매가 가장 높았던 상품이 강조됩니다.'}
+        {' '}"다음 영업일"은 한국 기준 토·일·공휴일(대체공휴일 포함)을 건너뛴 평일입니다.
       </p>
     </div>
   );
