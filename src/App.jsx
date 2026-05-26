@@ -2477,6 +2477,75 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
   const [sortKey, setSortKey] = useState('adCount');
   const [sortDir, setSortDir] = useState('desc');
   const [query, setQuery] = useState('');
+  const [selectedRecs, setSelectedRecs] = useState(() => new Set());
+  const [showAdSetModal, setShowAdSetModal] = useState(false);
+  const [adSetForm, setAdSetForm] = useState({ name: '', message: '', target: '' });
+
+  const toggleRec = (code) => {
+    setSelectedRecs(prev => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  };
+  const clearRecs = () => setSelectedRecs(new Set());
+
+  const downloadAdSetXlsx = async () => {
+    const selected = recommendedProducts.filter(p => selectedRecs.has(p.code));
+    if (selected.length === 0) return;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('SNS광고리스트');
+    ws.columns = [
+      { header: 'No', key: 'no', width: 5 },
+      { header: '광고 이름', key: 'name', width: 32 },
+      { header: '상태', key: 'status', width: 6 },
+      { header: '이미지', key: 'image', width: 8 },
+      { header: '문구', key: 'message', width: 40 },
+      { header: '타켓', key: 'target', width: 40 },
+      { header: '상품리스트', key: 'product', width: 50 },
+      { header: '썸네일', key: 'thumb', width: 8 },
+      { header: '특이사항', key: 'note', width: 20 },
+      { header: '횟수', key: 'count', width: 6 },
+      { header: '비고', key: 'memo', width: 16 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
+    selected.forEach((p, i) => {
+      if (i === 0) {
+        ws.addRow({
+          no: 1,
+          name: adSetForm.name,
+          status: 'ON',
+          image: '그림',
+          message: adSetForm.message,
+          target: adSetForm.target,
+          product: p.productName,
+          thumb: '',
+          note: '',
+          count: selected.length,
+          memo: '',
+        });
+      } else {
+        ws.addRow({ no: '', name: '', status: '', image: '', message: '', target: '', product: p.productName, thumb: '', note: '', count: '', memo: '' });
+      }
+    });
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const ts = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `광고세트_${adSetForm.name || 'new'}_${ts}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    setShowAdSetModal(false);
+    setSelectedRecs(new Set());
+    setAdSetForm({ name: '', message: '', target: '' });
+  };
   const [targetRoas, setTargetRoas] = useState(3);
   const [actionFilter, setActionFilter] = useState('all');
   const [baselineDays, setBaselineDays] = useState(7);
@@ -3055,39 +3124,129 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
           <div className="bg-cream-50 border border-cream-400 px-4 py-3">
             <div className="flex items-baseline gap-2 flex-wrap mb-2">
               <h3 className="text-sm font-medium text-stone-800">광고 추천 상품 {recommendedProducts.length}개</h3>
-              <span className="text-xs text-stone-500">강화(★) 상품 우선 + 광고 미진입 베스트 — 추천 순</span>
+              <span className="text-xs text-stone-500">강화(★) 상품 우선 + 광고 미진입 베스트 — 카드 클릭으로 선택</span>
+              <div className="ml-auto flex items-center gap-2">
+                {selectedRecs.size > 0 && (
+                  <button onClick={clearRecs} className="text-xs text-stone-500 hover:text-stone-900 underline underline-offset-2">
+                    선택 해제
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowAdSetModal(true)}
+                  disabled={selectedRecs.size === 0}
+                  className="bg-stone-900 hover:bg-stone-800 disabled:bg-cream-300 disabled:text-stone-400 text-cream-50 px-3 py-1.5 text-xs font-medium transition"
+                >
+                  광고세트 만들기 ({selectedRecs.size}개)
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-5 md:grid-cols-10 gap-2">
-              {recommendedProducts.map((g, i) => (
-                <div key={i} className={`border-2 bg-cream-50 ${g.isInAd ? 'border-amber-400' : 'border-emerald-400'}`}>
-                  <div className="w-full aspect-square bg-cream-200 overflow-hidden flex items-center justify-center relative">
-                    {g.imageUrl && g.imageUrl !== '이미지없음' ? (
-                      <img src={g.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
-                    ) : (
-                      <span className="text-xs text-stone-400">이미지 없음</span>
-                    )}
-                    <span className={`absolute top-0 left-0 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium ${g.isInAd ? 'bg-amber-600' : 'bg-emerald-600'}`}>
-                      {g.isInAd ? '강화★' : '미진입'}
-                    </span>
-                    <span className="absolute top-0 right-0 bg-stone-900/80 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">
-                      {i + 1}
-                    </span>
-                  </div>
-                  <div className="px-1.5 py-1">
-                    <div className="text-[11px] font-medium text-stone-700 truncate leading-tight" title={g.productName}>{g.productName}</div>
-                    <div className="text-[10px] text-stone-500 mt-0.5 truncate">{g.code || '-'} · {g.category || '-'}</div>
-                    <div className="text-[11px] mt-0.5 text-stone-700 font-medium">
-                      판매 {g.totalSales.toLocaleString()}
+              {recommendedProducts.map((g, i) => {
+                const isSel = selectedRecs.has(g.code);
+                return (
+                  <div
+                    key={i}
+                    onClick={() => g.code && toggleRec(g.code)}
+                    className={`bg-cream-50 cursor-pointer transition ${
+                      isSel ? 'border-4 border-stone-900 shadow-md' : `border-2 ${g.isInAd ? 'border-amber-400' : 'border-emerald-400'}`
+                    }`}
+                  >
+                    <div className="w-full aspect-square bg-cream-200 overflow-hidden flex items-center justify-center relative">
+                      {g.imageUrl && g.imageUrl !== '이미지없음' ? (
+                        <img src={g.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
+                      ) : (
+                        <span className="text-xs text-stone-400">이미지 없음</span>
+                      )}
+                      <span className={`absolute top-0 left-0 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium ${g.isInAd ? 'bg-amber-600' : 'bg-emerald-600'}`}>
+                        {g.isInAd ? '강화★' : '미진입'}
+                      </span>
+                      <span className="absolute top-0 right-0 bg-stone-900/80 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">
+                        {i + 1}
+                      </span>
+                      {isSel && (
+                        <span className="absolute bottom-1 right-1 bg-stone-900 text-cream-50 text-[11px] px-1.5 py-0.5 font-bold">✓</span>
+                      )}
                     </div>
-                    {g.isInAd && (
-                      <div className="text-[10px] text-stone-500 truncate">
-                        {g.maxLift > 0 && `+${g.maxLift.toFixed(1)}`}
-                        {g.maxRoas > 0 && ` · R ${g.maxRoas.toFixed(1)}`}
+                    <div className="px-1.5 py-1">
+                      <div className="text-[11px] font-medium text-stone-700 truncate leading-tight" title={g.productName}>{g.productName}</div>
+                      <div className="text-[10px] text-stone-500 mt-0.5 truncate">{g.code || '-'} · {g.category || '-'}</div>
+                      <div className="text-[11px] mt-0.5 text-stone-700 font-medium">
+                        판매 {g.totalSales.toLocaleString()}
                       </div>
-                    )}
+                      {g.isInAd && (
+                        <div className="text-[10px] text-stone-500 truncate">
+                          {g.maxLift > 0 && `+${g.maxLift.toFixed(1)}`}
+                          {g.maxRoas > 0 && ` · R ${g.maxRoas.toFixed(1)}`}
+                        </div>
+                      )}
+                    </div>
                   </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {showAdSetModal && (
+          <div className="fixed inset-0 z-50 bg-stone-900/50 flex items-center justify-center p-4" onClick={() => setShowAdSetModal(false)}>
+            <div className="bg-cream-50 w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+              <div className="px-5 py-4 border-b border-cream-400 flex items-center justify-between">
+                <div>
+                  <h2 className="text-base font-medium">광고세트 만들기</h2>
+                  <p className="text-xs text-stone-500 mt-0.5">선택한 {selectedRecs.size}개 상품으로 SNS 광고리스트 형식 .xlsx 생성</p>
                 </div>
-              ))}
+                <button onClick={() => setShowAdSetModal(false)} className="text-stone-400 hover:text-stone-700">
+                  <LucideX size={18} />
+                </button>
+              </div>
+              <div className="px-5 py-4 space-y-3 overflow-y-auto">
+                <div>
+                  <label className="text-xs text-stone-600 block mb-1">광고 이름 <span className="text-stone-400">(예: 담당자_캠페인설명(MMDD))</span></label>
+                  <input
+                    type="text"
+                    value={adSetForm.name}
+                    onChange={e => setAdSetForm({ ...adSetForm, name: e.target.value })}
+                    placeholder="예: 이예화_여름반팔(0526)"
+                    className="w-full px-2 py-2 text-sm border border-cream-400 bg-cream-100"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-stone-600 block mb-1">문구</label>
+                  <textarea
+                    value={adSetForm.message}
+                    onChange={e => setAdSetForm({ ...adSetForm, message: e.target.value })}
+                    rows={3}
+                    placeholder="광고에 들어갈 문구..."
+                    className="w-full px-2 py-2 text-sm border border-cream-400 bg-cream-100 resize-y"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-stone-600 block mb-1">타켓</label>
+                  <textarea
+                    value={adSetForm.target}
+                    onChange={e => setAdSetForm({ ...adSetForm, target: e.target.value })}
+                    rows={3}
+                    placeholder="타겟 설명 (연령·관심사 등)..."
+                    className="w-full px-2 py-2 text-sm border border-cream-400 bg-cream-100 resize-y"
+                  />
+                </div>
+                <div className="bg-cream-200 border border-cream-400 px-3 py-2 text-xs text-stone-600">
+                  선택 상품: {recommendedProducts.filter(p => selectedRecs.has(p.code)).map(p => p.code).join(', ')}
+                </div>
+              </div>
+              <div className="px-5 py-3 border-t border-cream-400 flex items-center justify-end gap-2 bg-cream-100">
+                <button onClick={() => setShowAdSetModal(false)} className="px-4 py-2 text-sm text-stone-600 hover:text-stone-900">
+                  취소
+                </button>
+                <button
+                  onClick={downloadAdSetXlsx}
+                  disabled={!adSetForm.name.trim()}
+                  className="bg-stone-900 hover:bg-stone-800 disabled:bg-cream-300 disabled:text-stone-400 text-cream-50 px-5 py-2 text-sm font-medium flex items-center gap-2"
+                >
+                  <LucideDownload size={14} />
+                  .xlsx 다운로드
+                </button>
+              </div>
             </div>
           </div>
         )}
