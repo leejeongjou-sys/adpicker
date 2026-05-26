@@ -2507,6 +2507,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
   const [adSetForm, setAdSetForm] = useState({ name: '', message: '', target: '' });
   const [recCount, setRecCount] = useState(20);
   const [recQuery, setRecQuery] = useState('');
+  const [refreshCounts, setRefreshCounts] = useState(() => ({}));
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
 
@@ -3062,8 +3063,7 @@ ${productInfo}
         const code = extractProductCode(g.productName);
         return code && !adCodes.has(code);
       })
-      .sort((a, b) => (b.totalSales || 0) - (a.totalSales || 0))
-      .slice(0, 30);
+      .sort((a, b) => (b.totalSales || 0) - (a.totalSales || 0));
     for (const g of noAdExtra) {
       list.push({
         productName: g.productName,
@@ -3782,11 +3782,13 @@ ${productInfo}
                                     return (b.totalSales || 0) - (a.totalSales || 0);
                                   })
                                 : [...pool].sort((a, b) => (b.totalSales || 0) - (a.totalSales || 0));
-                              const final = sorted.slice(0, 20);
-                              const cutCount = c.prods.filter(p => p.isCut).length;
                               const refreshKey = 'refresh-' + c.no + c.name;
+                              const showCount = refreshCounts[refreshKey] || 20;
+                              const final = sorted.slice(0, showCount);
+                              const totalCount = sorted.length;
+                              const cutCount = c.prods.filter(p => p.isCut).length;
                               const open = expanded.has(refreshKey);
-                              if (final.length === 0) return null;
+                              if (totalCount === 0) return null;
                               return (
                                 <div className="mt-4 border-t border-cream-300 pt-3">
                                   <button
@@ -3794,7 +3796,7 @@ ${productInfo}
                                     className="flex items-center gap-2 text-xs font-medium text-stone-700 hover:text-stone-900"
                                   >
                                     <span className="text-stone-400">{open ? '▾' : '▸'}</span>
-                                    교체 후보 추천 {final.length}개
+                                    교체 후보 추천 {final.length}/{totalCount}개
                                     {topCat && <span className="text-stone-400 font-normal">· 카테고리 {topCat} 우선</span>}
                                     {cutCount > 0 && <span className="text-rose-600 font-normal">· 빼기 후보 {cutCount}개</span>}
                                   </button>
@@ -3827,6 +3829,19 @@ ${productInfo}
                                           </div>
                                         </div>
                                       ))}
+                                    </div>
+                                  )}
+                                  {open && final.length < totalCount && (
+                                    <div className="mt-3 flex justify-center">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setRefreshCounts(prev => ({ ...prev, [refreshKey]: (prev[refreshKey] || 20) + 20 }));
+                                        }}
+                                        className="px-4 py-1.5 text-xs font-medium text-stone-700 border border-cream-400 hover:bg-cream-200 rounded"
+                                      >
+                                        20개 더 보기 ({totalCount - final.length}개 남음)
+                                      </button>
                                     </div>
                                   )}
                                 </div>
