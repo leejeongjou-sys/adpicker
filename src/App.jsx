@@ -2438,6 +2438,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
   const [sortKey, setSortKey] = useState('adCount');
   const [sortDir, setSortDir] = useState('desc');
   const [query, setQuery] = useState('');
+  const [targetRoas, setTargetRoas] = useState(3);
+  const [actionFilter, setActionFilter] = useState('all');
 
   const codeMap = useMemo(() => {
     const m = new Map();
@@ -2557,8 +2559,15 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
   // 광고 중심
   const campaignRows = useMemo(() => {
     const len = dateLabels.length;
+    const reportEnd = dateLabels[len - 1] || '';
+    const endDate = reportEnd ? new Date(reportEnd) : new Date();
     return adList.map(camp => {
       const pi = postIdxOf(camp.postCode);
+      const postDate = parsePostDate(camp.postCode, reportEnd);
+      const ageDays = postDate && !isNaN(endDate.getTime())
+        ? Math.max(0, Math.round((endDate.getTime() - postDate.getTime()) / 86400000))
+        : null;
+      const ageGroup = ageGroupOf(ageDays);
       const prods = camp.products.map(p => {
         const code = (p.codes || []).find(c => codeMap.has(c)) || (p.codes || [])[0] || '';
         const g = code ? codeMap.get(code) : null;
@@ -2582,21 +2591,38 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         x.isBest = x.nextDaySales != null && x.nextDaySales === maxNext && maxNext > 0;
       });
       const perf = perfMap.get(camp.name);
+      const roas = perf?.roas ?? null;
+      // 추천 액션 판정
+      let action = null;
+      if (roas != null) {
+        const isOld = ageDays != null && ageDays > 60;
+        const isFresh = ageDays != null && ageDays <= 14;
+        if (roas >= targetRoas * 1.4) action = { type: 'scale', label: '증액', tone: 'green' };
+        else if (roas >= targetRoas) action = { type: 'hold', label: '유지', tone: 'amber' };
+        else if (roas < targetRoas * 0.5 && isOld) action = { type: 'stop', label: '종료', tone: 'gray' };
+        else if (roas < targetRoas && isOld) action = { type: 'cut', label: '감액', tone: 'red' };
+        else action = { type: 'refresh', label: '소재교체', tone: 'orange' };
+      }
+      const statusLc = String(camp.status || perf?.status || '').toLowerCase();
+      const inactive = statusLc === 'inactive' || statusLc === 'off' || statusLc === '꺼짐';
+      if (inactive) action = { type: 'inactive', label: '비활성', tone: 'gray' };
       return {
         no: camp.no, name: camp.name, manager: camp.manager,
         postCode: camp.postCode, status: camp.status,
+        ageDays, ageGroup,
+        action,
         prods,
         productCount: prods.length,
         matchedCount: prods.filter(x => x.matched).length,
         nextDayTotal: prods.reduce((s, x) => s + (x.nextDaySales || 0), 0),
         bestName: (prods.find(x => x.isBest) || {}).productName || '',
-        roas: perf?.roas ?? null,
+        roas,
         revenue: perf?.revenue ?? null,
         purchases: perf?.purchases ?? null,
         spend: perf?.spend ?? null,
       };
     });
-  }, [adList, codeMap, dateLabels, perfMap]);
+  }, [adList, codeMap, dateLabels, perfMap, targetRoas]);
 
   const sortedProducts = useMemo(() => {
     let list = products;
@@ -2626,8 +2652,17 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         (c.manager || '').toLowerCase().includes(q)
       );
     }
+    if (actionFilter !== 'all') {
+      list = list.filter(c => c.action?.type === actionFilter);
+    }
     return [...list].sort((a, b) => (b.postCode || '').localeCompare(a.postCode || ''));
-  }, [campaignRows, query]);
+  }, [campaignRows, query, actionFilter]);
+
+  const actionCounts = useMemo(() => {
+    const m = { scale: 0, hold: 0, refresh: 0, cut: 0, stop: 0, inactive: 0 };
+    for (const c of campaignRows) if (c.action) m[c.action.type] = (m[c.action.type] || 0) + 1;
+    return m;
+  }, [campaignRows]);
 
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
@@ -2886,59 +2921,113 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
           </table>
         </div>
       ) : (
-        <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-cream-200 text-stone-600">
-              <tr>
-                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">#</th>
-                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">캠페인명</th>
-                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">담당자</th>
-                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">게시일</th>
-                <th className="px-3 py-2 text-right font-medium whitespace-nowrap">상품수</th>
-                <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매칭</th>
-                {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap"><InfoTerm term="ROAS" /></th>}
-                {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매출</th>}
-                {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">구매</th>}
-                <th className="px-3 py-2 text-left font-medium whitespace-nowrap">게시 다음날 효율 1위</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedCampaigns.map((c, i) => {
-                const key = 'C' + c.no + c.name;
-                const isOpen = expanded.has(key);
-                return (
-                  <React.Fragment key={key + i}>
-                    <tr className="border-t border-cream-300 hover:bg-cream-100 cursor-pointer" onClick={() => toggleExpand(key)}>
-                      <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
-                      <td className="px-3 py-2 whitespace-nowrap max-w-[280px] truncate" title={c.name}>
-                        <span className="text-stone-400 mr-1">{isOpen ? '▾' : '▸'}</span>{c.name}
-                      </td>
-                      <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{c.manager}</td>
-                      <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{fmtPost(c.postCode)}</td>
-                      <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.productCount}</td>
-                      <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.matchedCount}/{c.productCount}</td>
-                      {hasPerf && (
-                        <td className="px-3 py-2 text-right font-medium text-stone-700 whitespace-nowrap">
-                          {c.roas == null ? '—' : c.roas.toFixed(2)}
+        <div className="space-y-3">
+          {hasPerf && (
+            <div className="flex items-center gap-3 flex-wrap bg-cream-50 border border-cream-400 px-4 py-3">
+              <label className="text-sm text-stone-700">목표 ROAS</label>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={targetRoas}
+                onChange={e => setTargetRoas(parseFloat(e.target.value) || 0)}
+                className="w-20 px-2 py-1 text-sm border border-cream-400 bg-cream-100"
+              />
+              <span className="text-xs text-stone-500">기준 이상은 증액, 미달은 노후 여부에 따라 감액/소재교체</span>
+              <div className="ml-auto flex items-center gap-1 flex-wrap">
+                <span className="text-xs text-stone-500 mr-1">추천 필터:</span>
+                {[
+                  { type: 'all', label: '전체', tone: 'gray' },
+                  { type: 'scale', label: `증액 ${actionCounts.scale}`, tone: 'green' },
+                  { type: 'hold', label: `유지 ${actionCounts.hold}`, tone: 'amber' },
+                  { type: 'refresh', label: `소재교체 ${actionCounts.refresh}`, tone: 'orange' },
+                  { type: 'cut', label: `감액 ${actionCounts.cut}`, tone: 'red' },
+                  { type: 'stop', label: `종료 ${actionCounts.stop}`, tone: 'gray' },
+                ].map(f => (
+                  <button
+                    key={f.type}
+                    onClick={() => setActionFilter(f.type)}
+                    className={`px-2 py-0.5 text-xs border transition ${
+                      actionFilter === f.type
+                        ? 'bg-stone-900 text-cream-50 border-stone-900'
+                        : 'bg-cream-50 text-stone-700 border-cream-400 hover:border-stone-700'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-cream-200 text-stone-600">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap">#</th>
+                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap">캠페인명</th>
+                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap">담당자</th>
+                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap">게시일</th>
+                  <th className="px-3 py-2 text-right font-medium whitespace-nowrap">경과일</th>
+                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap">나이</th>
+                  <th className="px-3 py-2 text-right font-medium whitespace-nowrap">상품수</th>
+                  {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap"><InfoTerm term="ROAS" /></th>}
+                  {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매출</th>}
+                  {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">구매</th>}
+                  {hasPerf && <th className="px-3 py-2 text-left font-medium whitespace-nowrap">추천</th>}
+                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap">효율 1위 상품</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedCampaigns.map((c, i) => {
+                  const key = 'C' + c.no + c.name;
+                  const isOpen = expanded.has(key);
+                  const tone = c.action?.tone || 'gray';
+                  const toneCls = tone === 'green' ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                    : tone === 'amber' ? 'bg-amber-100 text-amber-800 border-amber-300'
+                    : tone === 'red' ? 'bg-rose-100 text-rose-800 border-rose-300'
+                    : tone === 'orange' ? 'bg-orange-100 text-orange-800 border-orange-300'
+                    : 'bg-stone-200 text-stone-700 border-stone-300';
+                  return (
+                    <React.Fragment key={key + i}>
+                      <tr className="border-t border-cream-300 hover:bg-cream-100 cursor-pointer" onClick={() => toggleExpand(key)}>
+                        <td className="px-3 py-2 text-stone-400 whitespace-nowrap">{i + 1}</td>
+                        <td className="px-3 py-2 whitespace-nowrap max-w-[280px] truncate" title={c.name}>
+                          <span className="text-stone-400 mr-1">{isOpen ? '▾' : '▸'}</span>{c.name}
                         </td>
-                      )}
-                      {hasPerf && (
-                        <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">
-                          {c.revenue == null ? '—' : Math.round(c.revenue).toLocaleString()}
+                        <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{c.manager}</td>
+                        <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{fmtPost(c.postCode)}</td>
+                        <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.ageDays == null ? '—' : `${c.ageDays}일`}</td>
+                        <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{c.ageGroup}</td>
+                        <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.productCount}</td>
+                        {hasPerf && (
+                          <td className="px-3 py-2 text-right font-medium text-stone-700 whitespace-nowrap">
+                            {c.roas == null ? '—' : c.roas.toFixed(2)}
+                          </td>
+                        )}
+                        {hasPerf && (
+                          <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">
+                            {c.revenue == null ? '—' : Math.round(c.revenue).toLocaleString()}
+                          </td>
+                        )}
+                        {hasPerf && (
+                          <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">
+                            {c.purchases == null ? '—' : c.purchases.toLocaleString()}
+                          </td>
+                        )}
+                        {hasPerf && (
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {c.action ? (
+                              <span className={`inline-flex px-2 py-0.5 text-xs border ${toneCls}`}>{c.action.label}</span>
+                            ) : <span className="text-stone-400 text-xs">—</span>}
+                          </td>
+                        )}
+                        <td className="px-3 py-2 text-stone-700 whitespace-nowrap max-w-[260px] truncate" title={c.bestName}>
+                          {c.bestName || '—'}
                         </td>
-                      )}
-                      {hasPerf && (
-                        <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">
-                          {c.purchases == null ? '—' : c.purchases.toLocaleString()}
-                        </td>
-                      )}
-                      <td className="px-3 py-2 text-stone-700 whitespace-nowrap max-w-[260px] truncate" title={c.bestName}>
-                        {c.bestName || '—'}
-                      </td>
-                    </tr>
-                    {isOpen && (
-                      <tr className="border-t border-cream-300">
-                        <td colSpan={hasPerf ? 10 : 7} className="p-0 bg-cream-100">
+                      </tr>
+                      {isOpen && (
+                        <tr className="border-t border-cream-300">
+                          <td colSpan={hasPerf ? 12 : 8} className="p-0 bg-cream-100">
                           <div className="px-6 py-4">
                             <div className="text-xs font-medium text-stone-600 mb-2">
                               {c.name} · 담긴 상품 {c.productCount}개
@@ -2965,6 +3054,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
               })}
             </tbody>
           </table>
+        </div>
         </div>
       )}
 
