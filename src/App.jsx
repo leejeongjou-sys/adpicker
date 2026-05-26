@@ -2505,6 +2505,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
   const [selectedRecs, setSelectedRecs] = useState(() => new Set());
   const [showAdSetModal, setShowAdSetModal] = useState(false);
   const [adSetForm, setAdSetForm] = useState({ name: '', message: '', target: '' });
+  const [recCount, setRecCount] = useState(20);
+  const [recQuery, setRecQuery] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
 
@@ -3012,8 +3014,36 @@ ${productInfo}
         maxRoas: null,
       }));
 
-    return [...boostList, ...noAdList].slice(0, 20);
-  }, [products, groups, adList, codeMap]);
+    let combined = [...boostList, ...noAdList];
+    if (recQuery.trim()) {
+      const q = recQuery.trim().toLowerCase();
+      combined = combined.filter(g =>
+        (g.productName || '').toLowerCase().includes(q) ||
+        (g.code || '').toLowerCase().includes(q) ||
+        (g.category || '').toLowerCase().includes(q)
+      );
+    }
+    return combined.slice(0, recCount);
+  }, [products, groups, adList, codeMap, recCount, recQuery]);
+
+  const recommendedTotal = useMemo(() => {
+    if (!adList || groups.length === 0) return 0;
+    const adCodes = new Set();
+    for (const camp of adList) {
+      for (const p of camp.products) {
+        for (const code of (p.codes || [])) adCodes.add(code);
+      }
+    }
+    const EXCLUDED = new Set(['기타', '미분류']);
+    const boost = products.filter(p => p.matched && p.strength?.type === 'boost').length;
+    const noAd = groups.filter(g => {
+      if (EXCLUDED.has(g.category)) return false;
+      if ((g.totalSales || 0) <= 0) return false;
+      const code = extractProductCode(g.productName);
+      return code && !adCodes.has(code);
+    }).length;
+    return boost + noAd;
+  }, [products, groups, adList]);
 
   const replaceCandidatePool = useMemo(() => {
     const list = [];
@@ -3214,9 +3244,24 @@ ${productInfo}
         {recommendedProducts.length > 0 && (
           <div className="bg-cream-50 border border-cream-400 px-4 py-3">
             <div className="flex items-baseline gap-2 flex-wrap mb-2">
-              <h3 className="text-sm font-medium text-stone-800">광고 추천 상품 {recommendedProducts.length}개</h3>
-              <span className="text-xs text-stone-500">강화(★) 상품 우선 + 광고 미진입 베스트 — 카드 클릭으로 선택</span>
-              <div className="ml-auto flex items-center gap-2">
+              <h3 className="text-sm font-medium text-stone-800">광고 추천 상품 {recommendedProducts.length} / {recommendedTotal}개</h3>
+              <span className="text-xs text-stone-500">강화(★) + 광고 미진입 — 카드 클릭으로 선택</span>
+              <div className="ml-auto flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5 bg-cream-100 px-2.5 py-1 border border-cream-400">
+                  <LucideSearch size={12} className="text-stone-500" />
+                  <input
+                    type="text"
+                    value={recQuery}
+                    onChange={e => setRecQuery(e.target.value)}
+                    placeholder="상품·코드·카테고리"
+                    className="text-xs bg-transparent focus:outline-none w-32 placeholder:text-stone-400"
+                  />
+                  {recQuery && (
+                    <button onClick={() => setRecQuery('')} className="text-stone-400 hover:text-stone-700">
+                      <LucideX size={12} />
+                    </button>
+                  )}
+                </div>
                 {selectedRecs.size > 0 && (
                   <button onClick={clearRecs} className="text-xs text-stone-500 hover:text-stone-900 underline underline-offset-2">
                     선택 해제
@@ -3275,6 +3320,16 @@ ${productInfo}
                 );
               })}
             </div>
+            {recommendedProducts.length < recommendedTotal && !recQuery.trim() && (
+              <div className="mt-3 text-center">
+                <button
+                  onClick={() => setRecCount(c => c + 10)}
+                  className="text-xs px-4 py-1.5 border border-cream-400 bg-cream-100 hover:bg-cream-200 text-stone-700"
+                >
+                  10개 더 보기 ({recommendedTotal - recommendedProducts.length}개 남음)
+                </button>
+              </div>
+            )}
           </div>
         )}
 
