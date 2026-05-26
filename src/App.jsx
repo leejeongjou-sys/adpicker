@@ -2653,7 +2653,6 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         ? Math.max(0, Math.round((endDate.getTime() - postDate.getTime()) / 86400000))
         : null;
       const ageGroup = ageGroupOf(ageDays);
-      const pi = postIdxOf(camp.postCode);
       const prods = camp.products.map(p => {
         const code = (p.codes || []).find(c => codeMap.has(c)) || (p.codes || [])[0] || '';
         const g = code ? codeMap.get(code) : null;
