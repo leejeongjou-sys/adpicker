@@ -3241,7 +3241,7 @@ ${productInfo}
 
       {viewMode === 'product' ? (
         <>
-        {recommendedProducts.length > 0 && (
+        {recommendedTotal > 0 && (
           <div className="bg-cream-50 border border-cream-400 px-4 py-3">
             <div className="flex items-baseline gap-2 flex-wrap mb-2">
               <h3 className="text-sm font-medium text-stone-800">광고 추천 상품 {recommendedProducts.length} / {recommendedTotal}개</h3>
@@ -3276,6 +3276,11 @@ ${productInfo}
                 </button>
               </div>
             </div>
+            {recommendedProducts.length === 0 ? (
+              <div className="py-6 text-center text-xs text-stone-500">
+                "{recQuery}"에 해당하는 추천 상품이 없어요.
+              </div>
+            ) : (
             <div className="grid grid-cols-5 md:grid-cols-10 gap-2">
               {recommendedProducts.map((g, i) => {
                 const isSel = selectedRecs.has(g.code);
@@ -3320,6 +3325,7 @@ ${productInfo}
                 );
               })}
             </div>
+            )}
             {recommendedProducts.length < recommendedTotal && !recQuery.trim() && (
               <div className="mt-3 text-center">
                 <button
