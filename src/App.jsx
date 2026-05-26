@@ -2544,17 +2544,35 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         c.isBest = c.nextDaySales != null && c.nextDaySales === maxNext && maxNext > 0;
         c.isBestRoas = c.roas != null && c.roas === maxRoas && maxRoas > 0;
       });
+      // 추천 강도
+      let strength = null;
+      if (g) {
+        if (hasPerf) {
+          const ndGood = maxNext >= 5;
+          const roasGood = maxRoas >= targetRoas;
+          if (ndGood && roasGood) strength = { type: 'boost', label: '강화', stars: 3, tone: 'green' };
+          else if (ndGood || roasGood) strength = { type: 'hold', label: '유지', stars: 2, tone: 'amber' };
+          else strength = { type: 'cut', label: '축소', stars: 1, tone: 'red' };
+        } else {
+          if (maxNext >= 5) strength = { type: 'boost', label: '강화', stars: 3, tone: 'green' };
+          else if (maxNext >= 2) strength = { type: 'hold', label: '유지', stars: 2, tone: 'amber' };
+          else if (maxNext > 0) strength = { type: 'weak', label: '약함', stars: 1, tone: 'orange' };
+          else strength = { type: 'none', label: '효과 없음', stars: 0, tone: 'stone' };
+        }
+      }
       return {
         code: realCode, adName: prod.adName, productName, imageUrl,
         matched: !!g, daily, total,
         recent1: g && len > 0 ? daily[len - 1] : 0,
         nextDayMax: g ? maxNext : 0,
         maxRoas,
+        strength,
+        strengthStars: strength?.stars ?? -1,
         campaigns: campWithEffect,
         adCount: campWithEffect.length,
       };
     });
-  }, [adList, codeMap, dateLabels, perfMap]);
+  }, [adList, codeMap, dateLabels, perfMap, targetRoas, hasPerf]);
 
   // 광고 중심
   const campaignRows = useMemo(() => {
@@ -2807,6 +2825,14 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                 <th onClick={() => toggleSort('nextDayMax')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 게시 다음날 판매 중 최댓값">
                   광고 다음날 최다{sortKey === 'nextDayMax' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
+                {hasPerf && (
+                  <th onClick={() => toggleSort('maxRoas')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 ROAS 중 최댓값">
+                    최고 ROAS{sortKey === 'maxRoas' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                  </th>
+                )}
+                <th onClick={() => toggleSort('strengthStars')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="광고 다음날 판매 + 최고 ROAS 종합 판단">
+                  광고 추천{sortKey === 'strengthStars' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -2843,10 +2869,29 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                       <td className="px-3 py-2 text-right whitespace-nowrap text-stone-700">
                         {p.matched && p.nextDayMax > 0 ? p.nextDayMax.toLocaleString() : '—'}
                       </td>
+                      {hasPerf && (
+                        <td className="px-3 py-2 text-right whitespace-nowrap text-stone-700">
+                          {p.matched && p.maxRoas > 0 ? p.maxRoas.toFixed(2) : '—'}
+                        </td>
+                      )}
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {p.strength ? (
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs border ${
+                            p.strength.tone === 'green' ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                            : p.strength.tone === 'amber' ? 'bg-amber-100 text-amber-800 border-amber-300'
+                            : p.strength.tone === 'orange' ? 'bg-orange-100 text-orange-800 border-orange-300'
+                            : p.strength.tone === 'red' ? 'bg-rose-100 text-rose-800 border-rose-300'
+                            : 'bg-stone-200 text-stone-700 border-stone-300'
+                          }`}>
+                            <span className="font-medium">{'★'.repeat(p.strength.stars)}{'☆'.repeat(3 - p.strength.stars)}</span>
+                            {p.strength.label}
+                          </span>
+                        ) : <span className="text-stone-400 text-xs">—</span>}
+                      </td>
                     </tr>
                     {isOpen && (
                       <tr className="border-t border-cream-300">
-                        <td colSpan={7} className="p-0 bg-cream-100">
+                        <td colSpan={hasPerf ? 9 : 8} className="p-0 bg-cream-100">
                           <div className="px-6 py-4 space-y-4">
                             <div>
                               <div className="text-xs font-medium text-stone-600 mb-2">
