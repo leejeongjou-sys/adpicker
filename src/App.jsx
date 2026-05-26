@@ -2479,6 +2479,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
   const [query, setQuery] = useState('');
   const [targetRoas, setTargetRoas] = useState(3);
   const [actionFilter, setActionFilter] = useState('all');
+  const [baselineDays, setBaselineDays] = useState(7);
 
   const codeMap = useMemo(() => {
     const m = new Map();
@@ -2582,7 +2583,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
           if (nbi >= 0 && nbi < len) nextDaySales = daily[nbi];
           const pi = postIdxOf(c.postCode);
           if (pi > 0) {
-            const start = Math.max(0, pi - 7);
+            const start = Math.max(0, pi - baselineDays);
             const days = pi - start;
             if (days > 0) {
               let sum = 0;
@@ -2637,7 +2638,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         adCount: campWithEffect.length,
       };
     });
-  }, [adList, codeMap, dateLabels, perfMap, targetRoas, hasPerf]);
+  }, [adList, codeMap, dateLabels, perfMap, targetRoas, hasPerf, baselineDays]);
 
   // 광고 중심
   const campaignRows = useMemo(() => {
@@ -2666,7 +2667,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
           imageUrl = g.imageUrl;
           if (nbi >= 0 && nbi < len) nextDaySales = daily[nbi];
           if (pi > 0) {
-            const start = Math.max(0, pi - 7);
+            const start = Math.max(0, pi - baselineDays);
             const days = pi - start;
             if (days > 0) {
               let sum = 0;
@@ -2719,7 +2720,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         spend: perf?.spend ?? null,
       };
     });
-  }, [adList, codeMap, dateLabels, perfMap, targetRoas]);
+  }, [adList, codeMap, dateLabels, perfMap, targetRoas, baselineDays]);
 
   const sortedProducts = useMemo(() => {
     let list = products;
@@ -2856,7 +2857,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         <div className="text-xs font-medium text-stone-700 truncate" title={title}>{title}</div>
         <div className="text-[11px] text-stone-500 mt-0.5">{sub}</div>
         <div className="text-[11px] text-stone-500 mt-0.5">
-          전 7일 평균 {baselineAvg == null ? '—' : baselineAvg.toFixed(1)}/일 → 다음 영업일 {nextDaySales == null ? '—' : nextDaySales}
+          전 {baselineDays}일 평균 {baselineAvg == null ? '—' : baselineAvg.toFixed(1)}/일 → 다음 영업일 {nextDaySales == null ? '—' : nextDaySales}
         </div>
         <div className={`text-[11px] mt-0.5 ${isBest ? 'text-stone-900 font-medium' : 'text-stone-500'}`}>
           증분 {lift == null ? '—' : (lift > 0 ? '+' : '') + lift.toFixed(1)}{isBest ? ' ★' : ''}
@@ -2923,6 +2924,19 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
               <LucideX size={13} />
             </button>
           )}
+        </div>
+        <div className="flex items-center gap-1.5 border border-cream-400 px-2 py-1" title="광고 게시 전 일평균 판매를 몇 일치로 잡을지">
+          <span className="text-xs text-stone-500">증분 기준</span>
+          <span className="text-xs text-stone-400">전</span>
+          <input
+            type="number"
+            min="1"
+            max="60"
+            value={baselineDays}
+            onChange={e => setBaselineDays(Math.max(1, Math.min(60, parseInt(e.target.value) || 7)))}
+            className="w-12 px-1 py-0.5 text-sm bg-cream-50 border border-cream-400 text-center"
+          />
+          <span className="text-xs text-stone-500">일 평균</span>
         </div>
         {viewMode === 'product' && (
           <div className="flex items-center border border-cream-400">
@@ -2993,7 +3007,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                 <th onClick={() => toggleSort('total')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
                   기간 판매{sortKey === 'total' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
-                <th onClick={() => toggleSort('maxLift')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 증분(다음 영업일 판매 − 게시 전 7일 평균) 중 최댓값">
+                <th onClick={() => toggleSort('maxLift')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title={`이 상품이 들어간 광고들의 증분(다음 영업일 판매 − 게시 전 ${baselineDays}일 평균) 중 최댓값`}>
                   광고 증분 최다{sortKey === 'maxLift' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
                 {hasPerf && (
