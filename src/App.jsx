@@ -2804,7 +2804,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
     };
   }, [campaignRows, hasPerf, codeMap]);
 
-  const noAdProducts = useMemo(() => {
+  const recommendedProducts = useMemo(() => {
     if (!adList || groups.length === 0) return [];
     const adCodes = new Set();
     for (const camp of adList) {
@@ -2813,7 +2813,27 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
       }
     }
     const EXCLUDED = new Set(['기타', '미분류']);
-    return groups
+
+    // 강화 상품 (이미 광고 진입, lift 큼 + ROAS 좋음)
+    const boostList = products
+      .filter(p => p.matched && p.strength?.type === 'boost')
+      .sort((a, b) => (b.maxLift || 0) - (a.maxLift || 0))
+      .map(p => {
+        const g = codeMap.get(p.code);
+        return {
+          productName: p.productName,
+          code: p.code,
+          category: g?.category || '',
+          imageUrl: p.imageUrl,
+          totalSales: p.total || 0,
+          isInAd: true,
+          maxLift: p.maxLift,
+          maxRoas: p.maxRoas,
+        };
+      });
+
+    // 광고 미진입 베스트
+    const noAdList = groups
       .filter(g => {
         if (EXCLUDED.has(g.category)) return false;
         if ((g.totalSales || 0) <= 0) return false;
@@ -2821,8 +2841,19 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         return code && !adCodes.has(code);
       })
       .sort((a, b) => (b.totalSales || 0) - (a.totalSales || 0))
-      .slice(0, 8);
-  }, [groups, adList]);
+      .map(g => ({
+        productName: g.productName,
+        code: extractProductCode(g.productName) || '',
+        category: g.category || '',
+        imageUrl: g.imageUrl,
+        totalSales: g.totalSales || 0,
+        isInAd: false,
+        maxLift: null,
+        maxRoas: null,
+      }));
+
+    return [...boostList, ...noAdList].slice(0, 20);
+  }, [products, groups, adList, codeMap]);
 
   const replaceCandidatePool = useMemo(() => {
     const list = [];
@@ -3020,28 +3051,40 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
 
       {viewMode === 'product' ? (
         <>
-        {noAdProducts.length > 0 && (
+        {recommendedProducts.length > 0 && (
           <div className="bg-cream-50 border border-cream-400 px-4 py-3">
             <div className="flex items-baseline gap-2 flex-wrap mb-2">
-              <h3 className="text-sm font-medium text-stone-800">광고 안 들어간 베스트 {noAdProducts.length}개</h3>
-              <span className="text-xs text-stone-500">기간 판매량 기준 · 광고 추가 검토 후보</span>
+              <h3 className="text-sm font-medium text-stone-800">광고 추천 상품 {recommendedProducts.length}개</h3>
+              <span className="text-xs text-stone-500">강화(★) 상품 우선 + 광고 미진입 베스트 — 추천 순</span>
             </div>
             <div className="flex flex-wrap gap-3">
-              {noAdProducts.map((g, i) => (
-                <div key={i} className="w-44 border border-cream-400 bg-cream-100">
-                  <div className="w-full h-32 bg-cream-200 overflow-hidden flex items-center justify-center">
+              {recommendedProducts.map((g, i) => (
+                <div key={i} className={`w-44 border-2 bg-cream-50 ${g.isInAd ? 'border-amber-400' : 'border-emerald-400'}`}>
+                  <div className="w-full h-32 bg-cream-200 overflow-hidden flex items-center justify-center relative">
                     {g.imageUrl && g.imageUrl !== '이미지없음' ? (
                       <img src={g.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
                     ) : (
                       <span className="text-xs text-stone-400">이미지 없음</span>
                     )}
+                    <span className={`absolute top-0 left-0 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium ${g.isInAd ? 'bg-amber-600' : 'bg-emerald-600'}`}>
+                      {g.isInAd ? '강화★' : '미진입'}
+                    </span>
+                    <span className="absolute top-0 right-0 bg-stone-900/80 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">
+                      {i + 1}
+                    </span>
                   </div>
                   <div className="px-2 py-1.5">
                     <div className="text-xs font-medium text-stone-700 truncate" title={g.productName}>{g.productName}</div>
-                    <div className="text-[11px] text-stone-500 mt-0.5">{extractProductCode(g.productName) || '-'}</div>
+                    <div className="text-[11px] text-stone-500 mt-0.5">{g.code || '-'} · {g.category || '-'}</div>
                     <div className="text-[11px] mt-0.5 text-stone-700 font-medium">
-                      기간 판매 {(g.totalSales || 0).toLocaleString()}
+                      기간 판매 {g.totalSales.toLocaleString()}
                     </div>
+                    {g.isInAd && (
+                      <div className="text-[11px] text-stone-500">
+                        {g.maxLift > 0 && `증분 +${g.maxLift.toFixed(1)}`}
+                        {g.maxRoas > 0 && ` · ROAS ${g.maxRoas.toFixed(2)}`}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
