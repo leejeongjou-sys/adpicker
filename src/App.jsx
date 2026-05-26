@@ -2477,6 +2477,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
       return {
         code: realCode, adName: prod.adName, productName, imageUrl,
         matched: !!g, daily, total,
+        recent1: g && len > 0 ? daily[len - 1] : 0,
+        nextDayMax: g ? maxNext : 0,
         campaigns: campWithEffect,
         adCount: campWithEffect.length,
       };
@@ -2688,6 +2690,12 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
                 <th onClick={() => toggleSort('total')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
                   기간 판매{sortKey === 'total' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
+                <th onClick={() => toggleSort('recent1')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
+                  최근 1일{sortKey === 'recent1' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </th>
+                <th onClick={() => toggleSort('nextDayMax')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 게시 다음날 판매 중 최댓값">
+                  광고 다음날 최다{sortKey === 'nextDayMax' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -2721,10 +2729,16 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
                       <td className="px-3 py-2 text-right font-medium whitespace-nowrap">
                         {p.matched ? p.total.toLocaleString() : '—'}
                       </td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap text-stone-700">
+                        {p.matched ? p.recent1.toLocaleString() : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap text-stone-700">
+                        {p.matched && p.nextDayMax > 0 ? p.nextDayMax.toLocaleString() : '—'}
+                      </td>
                     </tr>
                     {isOpen && (
                       <tr className="border-t border-cream-300">
-                        <td colSpan={6} className="p-0 bg-cream-100">
+                        <td colSpan={8} className="p-0 bg-cream-100">
                           <div className="px-6 py-4 space-y-4">
                             <div>
                               <div className="text-xs font-medium text-stone-600 mb-2">
