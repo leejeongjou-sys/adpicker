@@ -1678,6 +1678,7 @@ const App = () => {
             fileName={fileName}
             campaigns={campaigns}
             campaignsName={campaignsName}
+            apiKey={apiKey}
             onReset={() => {
               setAdList(null);
               setAdListName('');
@@ -2470,7 +2471,7 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
   );
 };
 
-const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaigns: perfCampaigns, campaignsName, onReset }) => {
+const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaigns: perfCampaigns, campaignsName, apiKey, onReset }) => {
   const [viewMode, setViewMode] = useState('product');
   const [periodMode, setPeriodMode] = useState('day');
   const [expanded, setExpanded] = useState(() => new Set());
@@ -2480,6 +2481,54 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
   const [selectedRecs, setSelectedRecs] = useState(() => new Set());
   const [showAdSetModal, setShowAdSetModal] = useState(false);
   const [adSetForm, setAdSetForm] = useState({ name: '', message: '', target: '' });
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
+
+  const generateAdCopy = async () => {
+    setAiError(null);
+    if (!apiKey || !apiKey.trim()) {
+      setAiError('Gemini API 키가 없습니다. 사이드바의 "직접 입력" 주제에서 키를 먼저 등록해주세요.');
+      return;
+    }
+    const selected = recommendedProducts.filter(p => selectedRecs.has(p.code));
+    if (selected.length === 0) return;
+    setAiLoading(true);
+    try {
+      const productInfo = selected.map(p => {
+        const tags = [];
+        if (p.category) tags.push(p.category);
+        if (p.isInAd) tags.push('광고검증');
+        return `- ${p.productName}${tags.length ? ` (${tags.join(', ')})` : ''}`;
+      }).join('\n');
+      const prompt = `당신은 남성 캐주얼 스트릿웨어 쇼핑몰의 메타(인스타·페이스북) 광고 카피라이터입니다.
+아래 상품들로 새 광고세트를 만들 때 메타 광고용 짧은 카피(문구)와 타겟 설명을 JSON으로 작성하세요.
+
+상품 목록:
+${productInfo}
+
+응답 JSON 형식:
+{
+  "message": "광고 문구 (3~4줄, 줄바꿈은 \\n. 이모지 1~2개까지 허용)",
+  "target": "타겟 설명. 메타 광고관리자 입력 형식으로: '* 연령 : 20~35\\n* 상세 타겟 : 키워드1, 키워드2, ...'"
+}
+
+규칙:
+- 문구는 한국어, 트렌디하고 자연스럽게. 상품의 카테고리·시즌 특성 반영.
+- 타겟은 연령 + 관심사 키워드(쇼핑몰, 스트리트웨어, 힙합 패션, 데일리룩, 데이트룩, 커플룩 등 상품 성격에 맞게). 5~10개.
+- JSON 외 다른 텍스트 금지.`;
+
+      const data = await callGemini(apiKey, prompt);
+      setAdSetForm(prev => ({
+        ...prev,
+        message: data.message || prev.message,
+        target: data.target || prev.target,
+      }));
+    } catch (e) {
+      setAiError(e.message);
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const toggleRec = (code) => {
     setSelectedRecs(prev => {
@@ -3228,12 +3277,34 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                     className="w-full px-2 py-2 text-sm border border-cream-400 bg-cream-100"
                   />
                 </div>
+                <div className="flex items-center justify-between bg-cream-200 border border-cream-400 px-3 py-2">
+                  <div className="text-xs text-stone-600">
+                    선택 상품 정보로 문구·타겟을 AI가 자동 작성
+                  </div>
+                  <button
+                    onClick={generateAdCopy}
+                    disabled={aiLoading || !apiKey}
+                    className="bg-stone-900 hover:bg-stone-800 disabled:bg-cream-300 disabled:text-stone-400 text-cream-50 px-3 py-1.5 text-xs font-medium flex items-center gap-1.5"
+                  >
+                    {aiLoading ? (
+                      <><LucideLoader2 size={12} className="animate-spin" /> 생성 중...</>
+                    ) : (
+                      <>✨ AI로 추천</>
+                    )}
+                  </button>
+                </div>
+                {aiError && <p className="text-xs text-rose-700">{aiError}</p>}
+                {!apiKey && (
+                  <p className="text-xs text-stone-500 -mt-2">
+                    Gemini API 키가 필요합니다. 사이드바 "직접 입력" 주제에서 키를 등록한 뒤 사용하세요.
+                  </p>
+                )}
                 <div>
                   <label className="text-xs text-stone-600 block mb-1">문구</label>
                   <textarea
                     value={adSetForm.message}
                     onChange={e => setAdSetForm({ ...adSetForm, message: e.target.value })}
-                    rows={3}
+                    rows={4}
                     placeholder="광고에 들어갈 문구..."
                     className="w-full px-2 py-2 text-sm border border-cream-400 bg-cream-100 resize-y"
                   />
@@ -3243,7 +3314,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                   <textarea
                     value={adSetForm.target}
                     onChange={e => setAdSetForm({ ...adSetForm, target: e.target.value })}
-                    rows={3}
+                    rows={4}
                     placeholder="타겟 설명 (연령·관심사 등)..."
                     className="w-full px-2 py-2 text-sm border border-cream-400 bg-cream-100 resize-y"
                   />
