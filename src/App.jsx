@@ -3057,10 +3057,10 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
               <h3 className="text-sm font-medium text-stone-800">광고 추천 상품 {recommendedProducts.length}개</h3>
               <span className="text-xs text-stone-500">강화(★) 상품 우선 + 광고 미진입 베스트 — 추천 순</span>
             </div>
-            <div className="flex flex-wrap gap-3">
+            <div className="grid grid-cols-5 md:grid-cols-10 gap-2">
               {recommendedProducts.map((g, i) => (
-                <div key={i} className={`w-44 border-2 bg-cream-50 ${g.isInAd ? 'border-amber-400' : 'border-emerald-400'}`}>
-                  <div className="w-full h-32 bg-cream-200 overflow-hidden flex items-center justify-center relative">
+                <div key={i} className={`border-2 bg-cream-50 ${g.isInAd ? 'border-amber-400' : 'border-emerald-400'}`}>
+                  <div className="w-full aspect-square bg-cream-200 overflow-hidden flex items-center justify-center relative">
                     {g.imageUrl && g.imageUrl !== '이미지없음' ? (
                       <img src={g.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
                     ) : (
@@ -3073,16 +3073,16 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                       {i + 1}
                     </span>
                   </div>
-                  <div className="px-2 py-1.5">
-                    <div className="text-xs font-medium text-stone-700 truncate" title={g.productName}>{g.productName}</div>
-                    <div className="text-[11px] text-stone-500 mt-0.5">{g.code || '-'} · {g.category || '-'}</div>
+                  <div className="px-1.5 py-1">
+                    <div className="text-[11px] font-medium text-stone-700 truncate leading-tight" title={g.productName}>{g.productName}</div>
+                    <div className="text-[10px] text-stone-500 mt-0.5 truncate">{g.code || '-'} · {g.category || '-'}</div>
                     <div className="text-[11px] mt-0.5 text-stone-700 font-medium">
-                      기간 판매 {g.totalSales.toLocaleString()}
+                      판매 {g.totalSales.toLocaleString()}
                     </div>
                     {g.isInAd && (
-                      <div className="text-[11px] text-stone-500">
-                        {g.maxLift > 0 && `증분 +${g.maxLift.toFixed(1)}`}
-                        {g.maxRoas > 0 && ` · ROAS ${g.maxRoas.toFixed(2)}`}
+                      <div className="text-[10px] text-stone-500 truncate">
+                        {g.maxLift > 0 && `+${g.maxLift.toFixed(1)}`}
+                        {g.maxRoas > 0 && ` · R ${g.maxRoas.toFixed(1)}`}
                       </div>
                     )}
                   </div>
