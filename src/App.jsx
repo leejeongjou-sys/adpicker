@@ -2682,6 +2682,46 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
     return m;
   }, [campaignRows]);
 
+  const insights = useMemo(() => {
+    if (!hasPerf) return null;
+    const sorted = campaignRows
+      .filter(c => c.roas != null && c.roas > 0)
+      .sort((a, b) => b.roas - a.roas);
+    if (sorted.length === 0) return null;
+    const topN = Math.max(3, Math.ceil(sorted.length * 0.3));
+    const top = sorted.slice(0, topN);
+    const managers = {}, ages = {}, cats = {}, brands = {};
+    let prodCountSum = 0, prodCountN = 0, matchedProds = 0;
+    let pkgCount = 0;
+    for (const c of top) {
+      managers[c.manager] = (managers[c.manager] || 0) + 1;
+      ages[c.ageGroup] = (ages[c.ageGroup] || 0) + 1;
+      prodCountSum += c.productCount;
+      prodCountN += 1;
+      for (const p of c.prods) {
+        if (p.matched) {
+          const g = codeMap.get(p.code);
+          if (g) {
+            matchedProds++;
+            if (g.category) cats[g.category] = (cats[g.category] || 0) + 1;
+            if (g.brand) brands[g.brand] = (brands[g.brand] || 0) + 1;
+            if (g.category === '패키지' || /PACK/i.test(g.productName)) pkgCount++;
+          }
+        }
+      }
+    }
+    const avgRoas = top.reduce((s, c) => s + c.roas, 0) / top.length;
+    return {
+      topCount: top.length,
+      totalCount: sorted.length,
+      avgRoas,
+      minRoas: top[top.length - 1].roas,
+      managers, ages, cats, brands,
+      avgProductCount: prodCountN ? Math.round((prodCountSum / prodCountN) * 10) / 10 : 0,
+      pkgRate: matchedProds ? pkgCount / matchedProds : 0,
+    };
+  }, [campaignRows, hasPerf, codeMap]);
+
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(k); setSortDir('desc'); }
@@ -3002,6 +3042,53 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+          {insights && (
+            <div className="bg-cream-50 border border-cream-400 px-4 py-3 space-y-2">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <h3 className="text-sm font-medium text-stone-800">세트 구성 힌트</h3>
+                <span className="text-xs text-stone-500">
+                  ROAS 상위 {insights.topCount}개 (전체 {insights.totalCount}개 중) · 평균 ROAS {insights.avgRoas.toFixed(2)} · 컷오프 ROAS {insights.minRoas.toFixed(2)}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1.5 text-xs">
+                <div>
+                  <span className="text-stone-500 mr-2">담당자</span>
+                  <span className="text-stone-700">
+                    {Object.entries(insights.managers).sort((a, b) => b[1] - a[1]).slice(0, 3)
+                      .map(([k, v]) => `${k} ${Math.round((v / insights.topCount) * 100)}%`).join(' · ') || '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-stone-500 mr-2">광고 나이</span>
+                  <span className="text-stone-700">
+                    {Object.entries(insights.ages).sort((a, b) => b[1] - a[1])
+                      .map(([k, v]) => `${k} ${Math.round((v / insights.topCount) * 100)}%`).join(' · ') || '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-stone-500 mr-2">평균 상품수</span>
+                  <span className="text-stone-700">{insights.avgProductCount}개 · 패키지 비중 {Math.round(insights.pkgRate * 100)}%</span>
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-stone-500 mr-2">카테고리 TOP</span>
+                  <span className="text-stone-700">
+                    {Object.entries(insights.cats).sort((a, b) => b[1] - a[1]).slice(0, 4)
+                      .map(([k, v]) => `${k} ${v}`).join(' · ') || '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-stone-500 mr-2">브랜드 TOP</span>
+                  <span className="text-stone-700">
+                    {Object.entries(insights.brands).sort((a, b) => b[1] - a[1]).slice(0, 4)
+                      .map(([k, v]) => `${k} ${v}`).join(' · ') || '—'}
+                  </span>
+                </div>
+              </div>
+              <p className="text-[11px] text-stone-500 leading-relaxed">
+                ROAS 상위 캠페인들의 공통 패턴이에요. 새 광고세트를 꾸릴 때 이 분포를 참고해 담당자·상품군·상품수 조합을 비슷하게 가져가면 효율 적중률이 올라갈 가능성이 큽니다.
+              </p>
             </div>
           )}
           <div className="border border-cream-400 bg-cream-50 overflow-x-auto">
