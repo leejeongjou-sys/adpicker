@@ -1392,78 +1392,98 @@ const App = () => {
     [mode]
   );
 
-  const handleFile = useCallback(async (file) => {
-    if (!file) return;
+  const handleFiles = useCallback(async (files) => {
+    const list = Array.isArray(files) ? files : (files ? [files] : []);
+    if (list.length === 0) return;
     setParsing(true);
     setError(null);
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      const isXlsx = bytes[0] === 0x50 && bytes[1] === 0x4B;
-      if (isXlsx) {
-        const zip = await JSZip.loadAsync(buf);
-        if (await isAdListXlsx(zip)) {
-          const list = await parseAdListXlsx(zip);
-          setAdList(list);
-          setAdListName(file.name);
-          if (skus.length > 0) setMode('adtrack');
-          return;
-        }
-        const parsedCampaigns = await parseAdPerformance(buf);
-        setCampaigns(parsedCampaigns);
-        setCampaignsName(file.name);
-        // 단독으로 광고성과만 올린 경우만 adperf 모드 진입
-        if (!adList && skus.length === 0) {
-          setSkus([]);
-          setGroups([]);
-          setDateLabels([]);
-          setMode('adperf');
-          setFileName(file.name);
-        }
-        return;
-      }
-      const decoder = new TextDecoder('euc-kr');
-      let text = decoder.decode(buf);
-      if (!text.includes('상품명') && !text.includes('<table')) {
-        text = new TextDecoder('utf-8').decode(buf);
-      }
+      let nextAdList = null, nextAdListName = '';
+      let nextSkus = null, nextGroups = null, nextDateLabels = null, nextFileName = '';
+      let nextCampaigns = null, nextCampaignsName = '';
+      let isSalesCsvOnly = false;
 
-      if (isAdListCsv(text)) {
-        const list = parseAdList(text);
-        setAdList(list);
-        setAdListName(file.name);
-        if (skus.length > 0) setMode('adtrack');
-        return;
-      }
-
-      const isHtml = text.trimStart().startsWith('<');
-      if (isHtml) {
-        const { skus: parsedSkus, dateLabels: dl } = parseHtmlXls(text);
-        setSkus(parsedSkus);
-        setGroups(groupByProduct(parsedSkus));
-        setDateLabels(dl);
-        setFileName(file.name);
-        if (adList) {
-          setMode('adtrack');
+      for (const file of list) {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        const isXlsx = bytes[0] === 0x50 && bytes[1] === 0x4B;
+        if (isXlsx) {
+          const zip = await JSZip.loadAsync(buf);
+          if (await isAdListXlsx(zip)) {
+            nextAdList = await parseAdListXlsx(zip);
+            nextAdListName = file.name;
+          } else {
+            nextCampaigns = await parseAdPerformance(buf);
+            nextCampaignsName = file.name;
+          }
+          continue;
+        }
+        const decoder = new TextDecoder('euc-kr');
+        let text = decoder.decode(buf);
+        if (!text.includes('상품명') && !text.includes('<table')) {
+          text = new TextDecoder('utf-8').decode(buf);
+        }
+        if (isAdListCsv(text)) {
+          nextAdList = parseAdList(text);
+          nextAdListName = file.name;
+          continue;
+        }
+        const isHtml = text.trimStart().startsWith('<');
+        if (isHtml) {
+          const parsed = parseHtmlXls(text);
+          nextSkus = parsed.skus;
+          nextGroups = groupByProduct(parsed.skus);
+          nextDateLabels = parsed.dateLabels;
+          nextFileName = file.name;
         } else {
-          if (mode !== 'xls') setTheme('bestseller');
-          setMode('xls');
+          nextGroups = parseProductCsv(text);
+          nextSkus = [];
+          nextDateLabels = [];
+          nextFileName = file.name;
+          isSalesCsvOnly = true;
         }
-      } else {
-        const productGroups = parseProductCsv(text);
-        setSkus([]);
-        setGroups(productGroups);
-        setDateLabels([]);
-        setFileName(file.name);
+      }
+
+      // 상태 일괄 반영
+      if (nextAdList !== null) { setAdList(nextAdList); setAdListName(nextAdListName); }
+      if (nextCampaigns !== null) { setCampaigns(nextCampaigns); setCampaignsName(nextCampaignsName); }
+      if (nextGroups !== null) {
+        setSkus(nextSkus);
+        setGroups(nextGroups);
+        setDateLabels(nextDateLabels);
+        setFileName(nextFileName);
+      }
+
+      // 모드 결정 — 이번에 들어온 것 + 기존 누적
+      const finalAdList = nextAdList ?? adList;
+      const finalSkus = nextSkus ?? skus;
+      const finalGroups = nextGroups ?? groups;
+      const finalCampaigns = nextCampaigns ?? campaigns;
+      const hasSalesXls = finalSkus.length > 0;
+      const hasAdList = !!finalAdList;
+      const hasCampaigns = finalCampaigns.length > 0;
+      const hasSalesCsv = finalGroups.length > 0 && finalSkus.length === 0;
+
+      if (hasAdList && hasSalesXls) {
+        setMode('adtrack');
+      } else if (hasCampaigns && !hasAdList && !hasSalesXls && !hasSalesCsv) {
+        setMode('adperf');
+      } else if (hasSalesXls) {
+        if (mode !== 'xls') setTheme('bestseller');
+        setMode('xls');
+      } else if (hasSalesCsv || isSalesCsvOnly) {
         if (mode !== 'csv') setTheme('bestseller');
         setMode('csv');
       }
+      // adList만 있고 매출 없으면 mode 그대로 (UploadArea 유지)
     } catch (e) {
       setError(`파일 파싱 실패: ${e.message}`);
     } finally {
       setParsing(false);
     }
-  }, [adList, skus, mode]);
+  }, [adList, skus, groups, campaigns, mode]);
+
+  const handleFile = handleFiles;
 
   const preview = useMemo(() => {
     if (groups.length === 0) return [];
@@ -1954,8 +1974,8 @@ const UploadArea = ({ onFile, parsing, inputRef, adList, adListName, onClearAdLi
         onDrop={(e) => {
           e.preventDefault();
           setDrag(false);
-          const f = e.dataTransfer.files[0];
-          if (f) onFile(f);
+          const files = Array.from(e.dataTransfer.files || []);
+          if (files.length > 0) onFile(files);
         }}
         className={`border border-dashed p-20 text-center transition ${
           drag ? 'border-stone-900 bg-cream-200' : 'border-cream-400 bg-cream-50'
@@ -1968,22 +1988,26 @@ const UploadArea = ({ onFile, parsing, inputRef, adList, adListName, onClearAdLi
           <span className="font-medium text-stone-800">sts_prdListStatistics .csv</span> (상품 누적) ·{' '}
           <span className="font-medium text-stone-800">메타 광고 성과 .xlsx</span> ·{' '}
           <span className="font-medium text-stone-800">SNS 광고리스트 .xlsx/.csv</span> — 모두 자동 인식해요.
-          <br />광고리스트 + 상품매출 .xls를 함께 올리면 광고-판매 추적 화면이 나옵니다. 메타 광고성과 .xlsx를 추가로 올리면 캠페인 ROAS·매출도 함께 표시됩니다.
-          <br />파일을 끌어다 놓거나 아래 버튼으로 선택하세요. 데이터는 브라우저에서만 처리됩니다.
+          <br />여러 파일을 <span className="font-medium text-stone-800">한꺼번에 드래그해도 OK</span>. 광고리스트 + 매출 .xls + (선택)광고성과 .xlsx를 같이 올리면 광고-판매 추적이 한 번에 열립니다.
+          <br />데이터는 브라우저에서만 처리됩니다.
         </p>
         <input
           ref={inputRef}
           type="file"
+          multiple
           accept=".xls,.xlsx,.html,.htm,.csv"
           className="hidden"
-          onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }}
+          onChange={e => {
+            const files = Array.from(e.target.files || []);
+            if (files.length > 0) onFile(files);
+          }}
         />
         <button
           onClick={() => inputRef.current?.click()}
           disabled={parsing}
           className="bg-stone-900 hover:bg-stone-800 disabled:bg-stone-400 text-cream-50 px-8 py-3 font-medium tracking-wide text-sm"
         >
-          {parsing ? '파싱 중...' : '파일 선택'}
+          {parsing ? '파싱 중...' : '파일 선택 (여러 개 가능)'}
         </button>
       </div>
     </div>
