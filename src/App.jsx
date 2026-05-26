@@ -1332,6 +1332,7 @@ const App = () => {
   const [skus, setSkus] = useState([]);
   const [groups, setGroups] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
+  const [campaignsName, setCampaignsName] = useState('');
   const [adList, setAdList] = useState(null);
   const [adListName, setAdListName] = useState('');
   const [dateLabels, setDateLabels] = useState([]);
@@ -1410,11 +1411,15 @@ const App = () => {
         }
         const parsedCampaigns = await parseAdPerformance(buf);
         setCampaigns(parsedCampaigns);
-        setSkus([]);
-        setGroups([]);
-        setDateLabels([]);
-        setMode('adperf');
-        setFileName(file.name);
+        setCampaignsName(file.name);
+        // 단독으로 광고성과만 올린 경우만 adperf 모드 진입
+        if (!adList && skus.length === 0) {
+          setSkus([]);
+          setGroups([]);
+          setDateLabels([]);
+          setMode('adperf');
+          setFileName(file.name);
+        }
         return;
       }
       const decoder = new TextDecoder('euc-kr');
@@ -1651,6 +1656,8 @@ const App = () => {
             groups={groups}
             dateLabels={dateLabels}
             fileName={fileName}
+            campaigns={campaigns}
+            campaignsName={campaignsName}
             onReset={() => {
               setAdList(null);
               setAdListName('');
@@ -1658,6 +1665,8 @@ const App = () => {
               setGroups([]);
               setDateLabels([]);
               setFileName('');
+              setCampaigns([]);
+              setCampaignsName('');
               setMode(null);
             }}
           />
@@ -1958,8 +1967,8 @@ const UploadArea = ({ onFile, parsing, inputRef, adList, adListName, onClearAdLi
           <span className="font-medium text-stone-800">stk_forOptSalesInfo .xls</span> (SKU 단위 · 이미지 포함) ·{' '}
           <span className="font-medium text-stone-800">sts_prdListStatistics .csv</span> (상품 누적) ·{' '}
           <span className="font-medium text-stone-800">메타 광고 성과 .xlsx</span> ·{' '}
-          <span className="font-medium text-stone-800">SNS 광고리스트 .csv</span> — 모두 자동 인식해요.
-          <br />광고리스트 + 상품매출 .xls를 함께 올리면 광고-판매 추적 화면이 나옵니다.
+          <span className="font-medium text-stone-800">SNS 광고리스트 .xlsx/.csv</span> — 모두 자동 인식해요.
+          <br />광고리스트 + 상품매출 .xls를 함께 올리면 광고-판매 추적 화면이 나옵니다. 메타 광고성과 .xlsx를 추가로 올리면 캠페인 ROAS·매출도 함께 표시됩니다.
           <br />파일을 끌어다 놓거나 아래 버튼으로 선택하세요. 데이터는 브라우저에서만 처리됩니다.
         </p>
         <input
@@ -2382,7 +2391,7 @@ const AdPerformanceView = ({ campaigns, fileName, onReset }) => {
   );
 };
 
-const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset }) => {
+const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaigns: perfCampaigns, campaignsName, onReset }) => {
   const [viewMode, setViewMode] = useState('product');
   const [periodMode, setPeriodMode] = useState('day');
   const [expanded, setExpanded] = useState(() => new Set());
@@ -2398,6 +2407,15 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
     }
     return m;
   }, [groups]);
+
+  const perfMap = useMemo(() => {
+    const m = new Map();
+    for (const c of perfCampaigns || []) {
+      if (c.name) m.set(c.name, c);
+    }
+    return m;
+  }, [perfCampaigns]);
+  const hasPerf = perfMap.size > 0;
 
   const periods = useMemo(() => {
     if (periodMode === 'day') {
@@ -2467,23 +2485,34 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
           const pi = postIdxOf(c.postCode);
           if (pi >= 0 && pi + 1 < len) nextDaySales = daily[pi + 1];
         }
-        return { ...c, nextDaySales };
+        const perf = perfMap.get(c.name);
+        return {
+          ...c, nextDaySales,
+          roas: perf?.roas ?? null,
+          revenue: perf?.revenue ?? null,
+          purchases: perf?.purchases ?? null,
+          spend: perf?.spend ?? null,
+        };
       });
       const validNext = campWithEffect.filter(c => c.nextDaySales != null).map(c => c.nextDaySales);
       const maxNext = validNext.length ? Math.max(...validNext) : 0;
+      const validRoas = campWithEffect.filter(c => c.roas != null && c.roas > 0).map(c => c.roas);
+      const maxRoas = validRoas.length ? Math.max(...validRoas) : 0;
       campWithEffect.forEach(c => {
         c.isBest = c.nextDaySales != null && c.nextDaySales === maxNext && maxNext > 0;
+        c.isBestRoas = c.roas != null && c.roas === maxRoas && maxRoas > 0;
       });
       return {
         code: realCode, adName: prod.adName, productName, imageUrl,
         matched: !!g, daily, total,
         recent1: g && len > 0 ? daily[len - 1] : 0,
         nextDayMax: g ? maxNext : 0,
+        maxRoas,
         campaigns: campWithEffect,
         adCount: campWithEffect.length,
       };
     });
-  }, [adList, codeMap, dateLabels]);
+  }, [adList, codeMap, dateLabels, perfMap]);
 
   // 광고 중심
   const campaignRows = useMemo(() => {
@@ -2512,6 +2541,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
       prods.forEach(x => {
         x.isBest = x.nextDaySales != null && x.nextDaySales === maxNext && maxNext > 0;
       });
+      const perf = perfMap.get(camp.name);
       return {
         no: camp.no, name: camp.name, manager: camp.manager,
         postCode: camp.postCode, status: camp.status,
@@ -2520,9 +2550,13 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
         matchedCount: prods.filter(x => x.matched).length,
         nextDayTotal: prods.reduce((s, x) => s + (x.nextDaySales || 0), 0),
         bestName: (prods.find(x => x.isBest) || {}).productName || '',
+        roas: perf?.roas ?? null,
+        revenue: perf?.revenue ?? null,
+        purchases: perf?.purchases ?? null,
+        spend: perf?.spend ?? null,
       };
     });
-  }, [adList, codeMap, dateLabels]);
+  }, [adList, codeMap, dateLabels, perfMap]);
 
   const sortedProducts = useMemo(() => {
     let list = products;
@@ -2572,7 +2606,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
   const matchedCount = products.filter(p => p.matched).length;
   const hasThumb = adList.some(c => c.products.some(p => p.thumbUrl));
 
-  const ProductCard = ({ thumbUrl, title, sub, nextDaySales, isBest }) => (
+  const ProductCard = ({ thumbUrl, title, sub, nextDaySales, isBest, roas, isBestRoas }) => (
     <div className={`w-40 bg-cream-50 ${isBest ? 'border-4 border-stone-900' : 'border border-cream-400'}`}>
       <div className="w-full h-40 bg-cream-200 overflow-hidden flex items-center justify-center relative">
         {thumbUrl ? (
@@ -2592,6 +2626,11 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
         <div className={`text-[11px] mt-0.5 ${isBest ? 'text-stone-900 font-medium' : 'text-stone-500'}`}>
           게시 다음날 판매 {nextDaySales == null ? '—' : nextDaySales}
         </div>
+        {hasPerf && (
+          <div className={`text-[11px] mt-0.5 ${isBestRoas ? 'text-amber-700 font-medium' : 'text-stone-500'}`}>
+            ROAS {roas == null ? '—' : roas.toFixed(2)}{isBestRoas ? ' ★' : ''}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2604,7 +2643,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
             광고-판매 추적 · {viewMode === 'product' ? '상품별' : '광고별'}
           </h2>
           <p className="text-xs text-stone-500 mt-1">
-            광고 {adListName} · 매출 {fileName} · 기간 {period} · 상품 {products.length}개 (매출매칭 {matchedCount}) · 캠페인 {campaignRows.length}개
+            광고 {adListName} · 매출 {fileName}{hasPerf ? ` · 성과 ${campaignsName}` : ''} · 기간 {period} · 상품 {products.length}개 (매출매칭 {matchedCount}) · 캠페인 {campaignRows.length}개
           </p>
         </div>
         <button
@@ -2748,6 +2787,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
                                     sub={`게시 ${fmtPost(c.postCode)} · ${c.manager}`}
                                     nextDaySales={c.nextDaySales}
                                     isBest={c.isBest}
+                                    roas={c.roas}
+                                    isBestRoas={c.isBestRoas}
                                   />
                                 ))}
                               </div>
@@ -2815,6 +2856,9 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
                 <th className="px-3 py-2 text-left font-medium whitespace-nowrap">게시일</th>
                 <th className="px-3 py-2 text-right font-medium whitespace-nowrap">상품수</th>
                 <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매칭</th>
+                {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">ROAS</th>}
+                {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매출</th>}
+                {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">구매</th>}
                 <th className="px-3 py-2 text-left font-medium whitespace-nowrap">게시 다음날 효율 1위</th>
               </tr>
             </thead>
@@ -2833,13 +2877,28 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, onReset
                       <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{fmtPost(c.postCode)}</td>
                       <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.productCount}</td>
                       <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.matchedCount}/{c.productCount}</td>
+                      {hasPerf && (
+                        <td className="px-3 py-2 text-right font-medium text-stone-700 whitespace-nowrap">
+                          {c.roas == null ? '—' : c.roas.toFixed(2)}
+                        </td>
+                      )}
+                      {hasPerf && (
+                        <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">
+                          {c.revenue == null ? '—' : Math.round(c.revenue).toLocaleString()}
+                        </td>
+                      )}
+                      {hasPerf && (
+                        <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">
+                          {c.purchases == null ? '—' : c.purchases.toLocaleString()}
+                        </td>
+                      )}
                       <td className="px-3 py-2 text-stone-700 whitespace-nowrap max-w-[260px] truncate" title={c.bestName}>
                         {c.bestName || '—'}
                       </td>
                     </tr>
                     {isOpen && (
                       <tr className="border-t border-cream-300">
-                        <td colSpan={7} className="p-0 bg-cream-100">
+                        <td colSpan={hasPerf ? 10 : 7} className="p-0 bg-cream-100">
                           <div className="px-6 py-4">
                             <div className="text-xs font-medium text-stone-600 mb-2">
                               {c.name} · 담긴 상품 {c.productCount}개
