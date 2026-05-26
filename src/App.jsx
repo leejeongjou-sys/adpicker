@@ -2719,6 +2719,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         revenue: perf?.revenue ?? null,
         purchases: perf?.purchases ?? null,
         spend: perf?.spend ?? null,
+        budget: perf?.budget ?? null,
+        carts: perf?.carts ?? null,
       };
     });
   }, [adList, codeMap, dateLabels, perfMap, targetRoas, baselineDays]);
@@ -3306,11 +3308,12 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                   <th className="px-3 py-2 text-right font-medium whitespace-nowrap">경과일</th>
                   <th className="px-3 py-2 text-left font-medium whitespace-nowrap">나이</th>
                   <th className="px-3 py-2 text-right font-medium whitespace-nowrap">상품수</th>
+                  {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">예산</th>}
                   {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap"><InfoTerm term="ROAS" /></th>}
                   {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">매출</th>}
                   {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">구매</th>}
+                  {hasPerf && <th className="px-3 py-2 text-right font-medium whitespace-nowrap">장바구니</th>}
                   {hasPerf && <th className="px-3 py-2 text-left font-medium whitespace-nowrap">추천</th>}
-                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap">효율 1위 상품</th>
                 </tr>
               </thead>
               <tbody>
@@ -3336,6 +3339,11 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                         <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{c.ageGroup}</td>
                         <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">{c.productCount}</td>
                         {hasPerf && (
+                          <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">
+                            {c.budget == null ? '—' : Math.round(c.budget).toLocaleString()}
+                          </td>
+                        )}
+                        {hasPerf && (
                           <td className="px-3 py-2 text-right font-medium text-stone-700 whitespace-nowrap">
                             {c.roas == null ? '—' : c.roas.toFixed(2)}
                           </td>
@@ -3351,19 +3359,21 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                           </td>
                         )}
                         {hasPerf && (
+                          <td className="px-3 py-2 text-right text-stone-600 whitespace-nowrap">
+                            {c.carts == null ? '—' : c.carts.toLocaleString()}
+                          </td>
+                        )}
+                        {hasPerf && (
                           <td className="px-3 py-2 whitespace-nowrap">
                             {c.action ? (
                               <span className={`inline-flex px-2 py-0.5 text-xs border ${toneCls}`}>{c.action.label}</span>
                             ) : <span className="text-stone-400 text-xs">—</span>}
                           </td>
                         )}
-                        <td className="px-3 py-2 text-stone-700 whitespace-nowrap max-w-[260px] truncate" title={c.bestName}>
-                          {c.bestName || '—'}
-                        </td>
                       </tr>
                       {isOpen && (
                         <tr className="border-t border-cream-300">
-                          <td colSpan={hasPerf ? 12 : 8} className="p-0 bg-cream-100">
+                          <td colSpan={hasPerf ? 13 : 8} className="p-0 bg-cream-100">
                           <div className="px-6 py-4">
                             <div className="text-xs font-medium text-stone-600 mb-2">
                               {c.name} · 담긴 상품 {c.productCount}개
