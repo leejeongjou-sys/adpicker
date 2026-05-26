@@ -2576,41 +2576,52 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         .slice()
         .sort((a, b) => (b.postCode || '').localeCompare(a.postCode || ''));
       const campWithEffect = sortedCamps.map(c => {
-        let nextDaySales = null;
+        let nextDaySales = null, baselineAvg = null, lift = null;
         if (g) {
           const nbi = nextBizIdxOf(c.postCode);
           if (nbi >= 0 && nbi < len) nextDaySales = daily[nbi];
+          const pi = postIdxOf(c.postCode);
+          if (pi > 0) {
+            const start = Math.max(0, pi - 7);
+            const days = pi - start;
+            if (days > 0) {
+              let sum = 0;
+              for (let i = start; i < pi; i++) sum += daily[i] || 0;
+              baselineAvg = sum / days;
+              if (nextDaySales != null) lift = nextDaySales - baselineAvg;
+            }
+          }
         }
         const perf = perfMap.get(c.name);
         return {
-          ...c, nextDaySales,
+          ...c, nextDaySales, baselineAvg, lift,
           roas: perf?.roas ?? null,
           revenue: perf?.revenue ?? null,
           purchases: perf?.purchases ?? null,
           spend: perf?.spend ?? null,
         };
       });
-      const validNext = campWithEffect.filter(c => c.nextDaySales != null).map(c => c.nextDaySales);
-      const maxNext = validNext.length ? Math.max(...validNext) : 0;
+      const validLifts = campWithEffect.filter(c => c.lift != null).map(c => c.lift);
+      const maxLift = validLifts.length ? Math.max(...validLifts) : 0;
       const validRoas = campWithEffect.filter(c => c.roas != null && c.roas > 0).map(c => c.roas);
       const maxRoas = validRoas.length ? Math.max(...validRoas) : 0;
       campWithEffect.forEach(c => {
-        c.isBest = c.nextDaySales != null && c.nextDaySales === maxNext && maxNext > 0;
+        c.isBest = c.lift != null && c.lift === maxLift && maxLift > 0;
         c.isBestRoas = c.roas != null && c.roas === maxRoas && maxRoas > 0;
       });
-      // 추천 강도
+      // 추천 강도 (lift 기반)
       let strength = null;
       if (g) {
         if (hasPerf) {
-          const ndGood = maxNext >= 5;
+          const liftGood = maxLift >= 3;
           const roasGood = maxRoas >= targetRoas;
-          if (ndGood && roasGood) strength = { type: 'boost', label: '강화', stars: 3, tone: 'green' };
-          else if (ndGood || roasGood) strength = { type: 'hold', label: '유지', stars: 2, tone: 'amber' };
+          if (liftGood && roasGood) strength = { type: 'boost', label: '강화', stars: 3, tone: 'green' };
+          else if (liftGood || roasGood) strength = { type: 'hold', label: '유지', stars: 2, tone: 'amber' };
           else strength = { type: 'cut', label: '축소', stars: 1, tone: 'red' };
         } else {
-          if (maxNext >= 5) strength = { type: 'boost', label: '강화', stars: 3, tone: 'green' };
-          else if (maxNext >= 2) strength = { type: 'hold', label: '유지', stars: 2, tone: 'amber' };
-          else if (maxNext > 0) strength = { type: 'weak', label: '약함', stars: 1, tone: 'orange' };
+          if (maxLift >= 3) strength = { type: 'boost', label: '강화', stars: 3, tone: 'green' };
+          else if (maxLift >= 1) strength = { type: 'hold', label: '유지', stars: 2, tone: 'amber' };
+          else if (maxLift > 0) strength = { type: 'weak', label: '약함', stars: 1, tone: 'orange' };
           else strength = { type: 'none', label: '효과 없음', stars: 0, tone: 'stone' };
         }
       }
@@ -2618,7 +2629,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         code: realCode, adName: prod.adName, productName, imageUrl,
         matched: !!g, daily, total,
         recent1: g && len > 0 ? daily[len - 1] : 0,
-        nextDayMax: g ? maxNext : 0,
+        maxLift: g ? maxLift : 0,
         maxRoas,
         strength,
         strengthStars: strength?.stars ?? -1,
@@ -2641,10 +2652,12 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         ? Math.max(0, Math.round((endDate.getTime() - postDate.getTime()) / 86400000))
         : null;
       const ageGroup = ageGroupOf(ageDays);
+      const pi = postIdxOf(camp.postCode);
       const prods = camp.products.map(p => {
         const code = (p.codes || []).find(c => codeMap.has(c)) || (p.codes || [])[0] || '';
         const g = code ? codeMap.get(code) : null;
-        let daily = new Array(len).fill(0), total = 0, nextDaySales = null;
+        let daily = new Array(len).fill(0), total = 0;
+        let nextDaySales = null, baselineAvg = null, lift = null;
         let productName = p.raw, imageUrl = null;
         if (g) {
           daily = dailyOfGroup(g, len);
@@ -2652,16 +2665,27 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
           productName = g.productName;
           imageUrl = g.imageUrl;
           if (nbi >= 0 && nbi < len) nextDaySales = daily[nbi];
+          if (pi > 0) {
+            const start = Math.max(0, pi - 7);
+            const days = pi - start;
+            if (days > 0) {
+              let sum = 0;
+              for (let i = start; i < pi; i++) sum += daily[i] || 0;
+              baselineAvg = sum / days;
+              if (nextDaySales != null) lift = nextDaySales - baselineAvg;
+            }
+          }
         }
         return {
           raw: p.raw, code, codes: p.codes, thumbUrl: p.thumbUrl || null,
-          matched: !!g, productName, imageUrl, daily, total, nextDaySales,
+          matched: !!g, productName, imageUrl, daily, total,
+          nextDaySales, baselineAvg, lift,
         };
       });
-      const validNext = prods.filter(x => x.nextDaySales != null).map(x => x.nextDaySales);
-      const maxNext = validNext.length ? Math.max(...validNext) : 0;
+      const validLifts = prods.filter(x => x.lift != null).map(x => x.lift);
+      const maxLift = validLifts.length ? Math.max(...validLifts) : 0;
       prods.forEach(x => {
-        x.isBest = x.nextDaySales != null && x.nextDaySales === maxNext && maxNext > 0;
+        x.isBest = x.lift != null && x.lift === maxLift && maxLift > 0;
       });
       const perf = perfMap.get(camp.name);
       const roas = perf?.roas ?? null;
@@ -2814,7 +2838,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
   const matchedCount = products.filter(p => p.matched).length;
   const hasThumb = adList.some(c => c.products.some(p => p.thumbUrl));
 
-  const ProductCard = ({ thumbUrl, title, sub, nextDaySales, isBest, roas, isBestRoas }) => (
+  const ProductCard = ({ thumbUrl, title, sub, nextDaySales, baselineAvg, lift, isBest, roas, isBestRoas }) => (
     <div className={`w-40 bg-cream-50 ${isBest ? 'border-4 border-stone-900' : 'border border-cream-400'}`}>
       <div className="w-full h-40 bg-cream-200 overflow-hidden flex items-center justify-center relative">
         {thumbUrl ? (
@@ -2831,8 +2855,11 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
       <div className="px-2 py-1.5">
         <div className="text-xs font-medium text-stone-700 truncate" title={title}>{title}</div>
         <div className="text-[11px] text-stone-500 mt-0.5">{sub}</div>
+        <div className="text-[11px] text-stone-500 mt-0.5">
+          전 7일 평균 {baselineAvg == null ? '—' : baselineAvg.toFixed(1)}/일 → 다음 영업일 {nextDaySales == null ? '—' : nextDaySales}
+        </div>
         <div className={`text-[11px] mt-0.5 ${isBest ? 'text-stone-900 font-medium' : 'text-stone-500'}`}>
-          다음 영업일 판매 {nextDaySales == null ? '—' : nextDaySales}
+          증분 {lift == null ? '—' : (lift > 0 ? '+' : '') + lift.toFixed(1)}{isBest ? ' ★' : ''}
         </div>
         {hasPerf && (
           <div className={`text-[11px] mt-0.5 ${isBestRoas ? 'text-amber-700 font-medium' : 'text-stone-500'}`}>
@@ -2966,15 +2993,15 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                 <th onClick={() => toggleSort('total')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900">
                   기간 판매{sortKey === 'total' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
-                <th onClick={() => toggleSort('nextDayMax')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 다음 영업일 판매 중 최댓값 (한국 영업일 기준)">
-                  다음 영업일 최다{sortKey === 'nextDayMax' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                <th onClick={() => toggleSort('maxLift')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 증분(다음 영업일 판매 − 게시 전 7일 평균) 중 최댓값">
+                  광고 증분 최다{sortKey === 'maxLift' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
                 {hasPerf && (
                   <th onClick={() => toggleSort('maxRoas')} className="px-3 py-2 text-right font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="이 상품이 들어간 광고들의 ROAS 중 최댓값">
                     최고 ROAS{sortKey === 'maxRoas' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                   </th>
                 )}
-                <th onClick={() => toggleSort('strengthStars')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="다음 영업일 판매 + 최고 ROAS 종합 판단">
+                <th onClick={() => toggleSort('strengthStars')} className="px-3 py-2 text-left font-medium whitespace-nowrap cursor-pointer hover:text-stone-900" title="광고 증분(다음 영업일 판매 − 전 7일 평균) + 최고 ROAS 종합 판단">
                   광고 추천{sortKey === 'strengthStars' ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
                 </th>
               </tr>
@@ -3011,7 +3038,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                         {p.matched ? p.total.toLocaleString() : '—'}
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap text-stone-700">
-                        {p.matched && p.nextDayMax > 0 ? p.nextDayMax.toLocaleString() : '—'}
+                        {p.matched && p.maxLift > 0 ? `+${p.maxLift.toFixed(1)}` : '—'}
                       </td>
                       {hasPerf && (
                         <td className="px-3 py-2 text-right whitespace-nowrap text-stone-700">
@@ -3040,7 +3067,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                             <div>
                               <div className="text-xs font-medium text-stone-600 mb-2">
                                 이 상품이 들어간 광고 {p.campaigns.length}개 — 광고별 사용 이미지
-                                <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 다음 영업일 판매가 가장 높았던 광고)</span>
+                                <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 광고 증분(다음 영업일 − 전 7일 평균)이 가장 컸던 광고)</span>
                               </div>
                               <div className="flex flex-wrap gap-3">
                                 {p.campaigns.map((c, ci) => (
@@ -3050,6 +3077,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                                     title={c.name}
                                     sub={`게시 ${fmtPost(c.postCode)} · ${c.manager}`}
                                     nextDaySales={c.nextDaySales}
+                                    baselineAvg={c.baselineAvg}
+                                    lift={c.lift}
                                     isBest={c.isBest}
                                     roas={c.roas}
                                     isBestRoas={c.isBestRoas}
@@ -3268,7 +3297,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                           <div className="px-6 py-4">
                             <div className="text-xs font-medium text-stone-600 mb-2">
                               {c.name} · 담긴 상품 {c.productCount}개
-                              <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 이 광고에서 다음 영업일 판매가 가장 높았던 상품)</span>
+                              <span className="text-stone-400 font-normal"> (두꺼운 테두리 = 이 광고에서 광고 증분(다음 영업일 − 전 7일 평균)이 가장 컸던 상품)</span>
                             </div>
                             <div className="flex flex-wrap gap-3">
                               {c.prods.map((pr, pi) => (
@@ -3278,6 +3307,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                                   title={pr.productName}
                                   sub={pr.code || '코드 없음'}
                                   nextDaySales={pr.matched ? pr.nextDaySales : null}
+                                  baselineAvg={pr.matched ? pr.baselineAvg : null}
+                                  lift={pr.matched ? pr.lift : null}
                                   isBest={pr.isBest}
                                 />
                               ))}
@@ -3298,8 +3329,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
       <p className="text-xs text-stone-500 leading-relaxed">
         광고리스트의 상품과 매출 파일을 상품코드(영문+숫자)로 매칭했어요.
         {viewMode === 'product'
-          ? ' 상품을 펼치면 광고마다 사용한 이미지를 비교할 수 있고, 다음 영업일 판매가 가장 높았던 광고가 강조됩니다.'
-          : ' 광고를 펼치면 담긴 상품들이 나오고, 그 광고 다음 영업일 판매가 가장 높았던 상품이 강조됩니다.'}
+          ? ' 상품을 펼치면 광고마다 사용한 이미지를 비교할 수 있고, 광고 증분(다음 영업일 − 전 7일 평균)이 가장 컸던 광고가 강조됩니다.'
+          : ' 광고를 펼치면 담긴 상품들이 나오고, 그 광고 광고 증분(다음 영업일 − 전 7일 평균)이 가장 컸던 상품이 강조됩니다.'}
         {' '}"다음 영업일"은 한국 기준 토·일·공휴일(대체공휴일 포함)을 건너뛴 평일입니다.
       </p>
     </div>
