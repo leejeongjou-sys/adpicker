@@ -2513,24 +2513,42 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
     ws.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
 
     selected.forEach((p, i) => {
-      if (i === 0) {
-        ws.addRow({
-          no: 1,
-          name: adSetForm.name,
-          status: 'ON',
-          image: '그림',
-          message: adSetForm.message,
-          target: adSetForm.target,
-          product: p.productName,
-          thumb: '',
-          note: '',
-          count: selected.length,
-          memo: '',
+      const data = i === 0
+        ? {
+            no: 1, name: adSetForm.name, status: 'ON', image: '그림',
+            message: adSetForm.message, target: adSetForm.target,
+            product: p.productName, thumb: '', note: '',
+            count: selected.length, memo: '',
+          }
+        : { no: '', name: '', status: '', image: '', message: '', target: '', product: p.productName, thumb: '', note: '', count: '', memo: '' };
+      const row = ws.addRow(data);
+      row.height = 80;
+      row.alignment = { vertical: 'middle', wrapText: true };
+    });
+    // H열(썸네일) 너비 + 헤더 높이
+    ws.getColumn('thumb').width = 14;
+    ws.getRow(1).height = 24;
+
+    // 이미지 임베드 (CORS 가능한 것만)
+    for (let i = 0; i < selected.length; i++) {
+      const p = selected[i];
+      const cell = ws.getRow(i + 2).getCell('thumb');
+      if (!p.imageUrl || p.imageUrl === '이미지없음') {
+        cell.value = '';
+        continue;
+      }
+      const buf = await fetchImageBuffer(p.imageUrl);
+      if (buf) {
+        const imgId = wb.addImage({ buffer: buf, extension: detectImageExt(p.imageUrl) });
+        ws.addImage(imgId, {
+          tl: { col: 7.1, row: i + 1.1 },
+          ext: { width: 80, height: 80 },
         });
       } else {
-        ws.addRow({ no: '', name: '', status: '', image: '', message: '', target: '', product: p.productName, thumb: '', note: '', count: '', memo: '' });
+        cell.value = { text: '이미지 보기', hyperlink: p.imageUrl };
+        cell.font = { color: { argb: 'FF2563EB' }, underline: true };
       }
-    });
+    }
 
     const buffer = await wb.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
