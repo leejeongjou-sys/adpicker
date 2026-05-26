@@ -2687,6 +2687,7 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
       const maxLift = validLifts.length ? Math.max(...validLifts) : 0;
       prods.forEach(x => {
         x.isBest = x.lift != null && x.lift === maxLift && maxLift > 0;
+        x.isCut = x.matched && x.lift != null && x.lift <= 0;
       });
       const perf = perfMap.get(camp.name);
       const roas = perf?.roas ?? null;
@@ -2839,8 +2840,8 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
   const matchedCount = products.filter(p => p.matched).length;
   const hasThumb = adList.some(c => c.products.some(p => p.thumbUrl));
 
-  const ProductCard = ({ thumbUrl, title, sub, nextDaySales, baselineAvg, lift, isBest, roas, isBestRoas }) => (
-    <div className={`w-40 bg-cream-50 ${isBest ? 'border-4 border-stone-900' : 'border border-cream-400'}`}>
+  const ProductCard = ({ thumbUrl, title, sub, nextDaySales, baselineAvg, lift, isBest, isCut, roas, isBestRoas }) => (
+    <div className={`w-40 bg-cream-50 ${isBest ? 'border-4 border-stone-900' : isCut ? 'border-2 border-rose-400' : 'border border-cream-400'}`}>
       <div className="w-full h-40 bg-cream-200 overflow-hidden flex items-center justify-center relative">
         {thumbUrl ? (
           <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
@@ -2850,6 +2851,11 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
         {isBest && (
           <span className="absolute top-0 left-0 bg-stone-900 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">
             BEST
+          </span>
+        )}
+        {isCut && !isBest && (
+          <span className="absolute top-0 left-0 bg-rose-600 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">
+            빼기
           </span>
         )}
       </div>
@@ -3324,9 +3330,56 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                                   baselineAvg={pr.matched ? pr.baselineAvg : null}
                                   lift={pr.matched ? pr.lift : null}
                                   isBest={pr.isBest}
+                                  isCut={c.action?.type === 'refresh' && pr.isCut}
                                 />
                               ))}
                             </div>
+                            {c.action?.type === 'refresh' && (() => {
+                              const catCounts = {};
+                              c.prods.forEach(p => {
+                                if (p.matched) {
+                                  const g = codeMap.get(p.code);
+                                  if (g?.category) catCounts[g.category] = (catCounts[g.category] || 0) + 1;
+                                }
+                              });
+                              const topCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+                              const inSame = topCat ? noAdProducts.filter(g => g.category === topCat) : [];
+                              const others = noAdProducts.filter(g => !topCat || g.category !== topCat);
+                              const replaceCands = [...inSame, ...others].slice(0, 6);
+                              const cutCount = c.prods.filter(p => p.isCut).length;
+                              if (replaceCands.length === 0) return null;
+                              return (
+                                <div className="mt-4 border-t border-cream-300 pt-3">
+                                  <div className="text-xs font-medium text-stone-700 mb-2">
+                                    교체 후보 — 광고 미진입 베스트{topCat ? ` · 카테고리 ${topCat}` : ''}
+                                    <span className="text-stone-400 font-normal ml-2">
+                                      {cutCount > 0 ? `빼기 후보 ${cutCount}개 → 아래 후보로 교체 검토` : '아래 후보를 새 광고세트에 투입 검토'}
+                                    </span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-3">
+                                    {replaceCands.map((g, i) => (
+                                      <div key={i} className="w-40 border-2 border-emerald-400 bg-cream-50">
+                                        <div className="w-full h-32 bg-cream-200 overflow-hidden flex items-center justify-center relative">
+                                          {g.imageUrl && g.imageUrl !== '이미지없음' ? (
+                                            <img src={g.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
+                                          ) : (
+                                            <span className="text-xs text-stone-400">이미지 없음</span>
+                                          )}
+                                          <span className="absolute top-0 left-0 bg-emerald-600 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">교체</span>
+                                        </div>
+                                        <div className="px-2 py-1.5">
+                                          <div className="text-xs font-medium text-stone-700 truncate" title={g.productName}>{g.productName}</div>
+                                          <div className="text-[11px] text-stone-500 mt-0.5">{extractProductCode(g.productName) || '-'} · {g.category}</div>
+                                          <div className="text-[11px] mt-0.5 text-stone-700 font-medium">
+                                            기간 판매 {(g.totalSales || 0).toLocaleString()}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </td>
                       </tr>
