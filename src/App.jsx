@@ -2823,6 +2823,56 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
       .slice(0, 8);
   }, [groups, adList]);
 
+  const replaceCandidatePool = useMemo(() => {
+    const list = [];
+    // 미진입 베스트 — totalSales 순으로 더 넓게
+    const adCodes = new Set();
+    for (const camp of adList) {
+      for (const p of camp.products) {
+        for (const code of (p.codes || [])) adCodes.add(code);
+      }
+    }
+    const EXCLUDED = new Set(['기타', '미분류']);
+    const noAdExtra = groups
+      .filter(g => {
+        if (EXCLUDED.has(g.category)) return false;
+        if ((g.totalSales || 0) <= 0) return false;
+        const code = extractProductCode(g.productName);
+        return code && !adCodes.has(code);
+      })
+      .sort((a, b) => (b.totalSales || 0) - (a.totalSales || 0))
+      .slice(0, 30);
+    for (const g of noAdExtra) {
+      list.push({
+        productName: g.productName,
+        code: extractProductCode(g.productName) || '',
+        category: g.category || '',
+        imageUrl: g.imageUrl,
+        totalSales: g.totalSales || 0,
+        isInAd: false,
+        maxLift: null,
+        maxRoas: null,
+      });
+    }
+    // 강화 추천 상품
+    for (const p of products) {
+      if (p.matched && p.strength?.type === 'boost') {
+        const g = codeMap.get(p.code);
+        list.push({
+          productName: p.productName,
+          code: p.code,
+          category: g?.category || '',
+          imageUrl: p.imageUrl,
+          totalSales: p.total || 0,
+          isInAd: true,
+          maxLift: p.maxLift,
+          maxRoas: p.maxRoas,
+        });
+      }
+    }
+    return list;
+  }, [groups, adList, products, codeMap]);
+
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(k); setSortDir('desc'); }
@@ -3343,40 +3393,63 @@ const AdTrackView = ({ adList, adListName, groups, dateLabels, fileName, campaig
                                 }
                               });
                               const topCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-                              const inSame = topCat ? noAdProducts.filter(g => g.category === topCat) : [];
-                              const others = noAdProducts.filter(g => !topCat || g.category !== topCat);
-                              const replaceCands = [...inSame, ...others].slice(0, 6);
+                              const currentCodes = new Set(c.prods.map(p => p.code).filter(Boolean));
+                              const pool = replaceCandidatePool.filter(g => !currentCodes.has(g.code));
+                              const sorted = topCat
+                                ? [...pool].sort((a, b) => {
+                                    const aMatch = a.category === topCat ? 0 : 1;
+                                    const bMatch = b.category === topCat ? 0 : 1;
+                                    if (aMatch !== bMatch) return aMatch - bMatch;
+                                    return (b.totalSales || 0) - (a.totalSales || 0);
+                                  })
+                                : [...pool].sort((a, b) => (b.totalSales || 0) - (a.totalSales || 0));
+                              const final = sorted.slice(0, 20);
                               const cutCount = c.prods.filter(p => p.isCut).length;
-                              if (replaceCands.length === 0) return null;
+                              const refreshKey = 'refresh-' + c.no + c.name;
+                              const open = expanded.has(refreshKey);
+                              if (final.length === 0) return null;
                               return (
                                 <div className="mt-4 border-t border-cream-300 pt-3">
-                                  <div className="text-xs font-medium text-stone-700 mb-2">
-                                    교체 후보 — 광고 미진입 베스트{topCat ? ` · 카테고리 ${topCat}` : ''}
-                                    <span className="text-stone-400 font-normal ml-2">
-                                      {cutCount > 0 ? `빼기 후보 ${cutCount}개 → 아래 후보로 교체 검토` : '아래 후보를 새 광고세트에 투입 검토'}
-                                    </span>
-                                  </div>
-                                  <div className="flex flex-wrap gap-3">
-                                    {replaceCands.map((g, i) => (
-                                      <div key={i} className="w-40 border-2 border-emerald-400 bg-cream-50">
-                                        <div className="w-full h-32 bg-cream-200 overflow-hidden flex items-center justify-center relative">
-                                          {g.imageUrl && g.imageUrl !== '이미지없음' ? (
-                                            <img src={g.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
-                                          ) : (
-                                            <span className="text-xs text-stone-400">이미지 없음</span>
-                                          )}
-                                          <span className="absolute top-0 left-0 bg-emerald-600 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium">교체</span>
-                                        </div>
-                                        <div className="px-2 py-1.5">
-                                          <div className="text-xs font-medium text-stone-700 truncate" title={g.productName}>{g.productName}</div>
-                                          <div className="text-[11px] text-stone-500 mt-0.5">{extractProductCode(g.productName) || '-'} · {g.category}</div>
-                                          <div className="text-[11px] mt-0.5 text-stone-700 font-medium">
-                                            기간 판매 {(g.totalSales || 0).toLocaleString()}
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); toggleExpand(refreshKey); }}
+                                    className="flex items-center gap-2 text-xs font-medium text-stone-700 hover:text-stone-900"
+                                  >
+                                    <span className="text-stone-400">{open ? '▾' : '▸'}</span>
+                                    교체 후보 추천 {final.length}개
+                                    {topCat && <span className="text-stone-400 font-normal">· 카테고리 {topCat} 우선</span>}
+                                    {cutCount > 0 && <span className="text-rose-600 font-normal">· 빼기 후보 {cutCount}개</span>}
+                                  </button>
+                                  {open && (
+                                    <div className="mt-3 flex flex-wrap gap-3">
+                                      {final.map((g, i) => (
+                                        <div key={i} className={`w-40 border-2 bg-cream-50 ${g.isInAd ? 'border-amber-400' : 'border-emerald-400'}`}>
+                                          <div className="w-full h-32 bg-cream-200 overflow-hidden flex items-center justify-center relative">
+                                            {g.imageUrl && g.imageUrl !== '이미지없음' ? (
+                                              <img src={g.imageUrl} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
+                                            ) : (
+                                              <span className="text-xs text-stone-400">이미지 없음</span>
+                                            )}
+                                            <span className={`absolute top-0 left-0 text-cream-50 text-[10px] px-1.5 py-0.5 font-medium ${g.isInAd ? 'bg-amber-600' : 'bg-emerald-600'}`}>
+                                              {g.isInAd ? '강화★' : '미진입'}
+                                            </span>
+                                          </div>
+                                          <div className="px-2 py-1.5">
+                                            <div className="text-xs font-medium text-stone-700 truncate" title={g.productName}>{g.productName}</div>
+                                            <div className="text-[11px] text-stone-500 mt-0.5">{g.code || '-'} · {g.category || '-'}</div>
+                                            <div className="text-[11px] mt-0.5 text-stone-700 font-medium">
+                                              기간 판매 {g.totalSales.toLocaleString()}
+                                            </div>
+                                            {g.isInAd && (
+                                              <div className="text-[11px] text-stone-500">
+                                                {g.maxLift > 0 && `증분 +${g.maxLift.toFixed(1)}`}
+                                                {g.maxRoas > 0 && ` · ROAS ${g.maxRoas.toFixed(2)}`}
+                                              </div>
+                                            )}
                                           </div>
                                         </div>
-                                      </div>
-                                    ))}
-                                  </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               );
                             })()}
