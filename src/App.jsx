@@ -1464,7 +1464,7 @@ const App = () => {
       const hasCampaigns = finalCampaigns.length > 0;
       const hasSalesCsv = finalGroups.length > 0 && finalSkus.length === 0;
 
-      if (hasAdList && hasSalesXls) {
+      if (hasAdList && (hasSalesXls || hasSalesCsv)) {
         setMode('adtrack');
       } else if (hasCampaigns && !hasAdList && !hasSalesXls && !hasSalesCsv) {
         setMode('adperf');
@@ -2732,7 +2732,7 @@ ${productInfo}
       let productName = prod.adName;
       if (g) {
         daily = dailyOfGroup(g, len);
-        total = daily.reduce((a, b) => a + b, 0);
+        total = len > 0 ? daily.reduce((a, b) => a + b, 0) : (g.totalSales || 0);
         imageUrl = g.imageUrl;
         productName = g.productName;
       }
@@ -2824,7 +2824,7 @@ ${productInfo}
         let productName = p.raw, imageUrl = null;
         if (g) {
           daily = dailyOfGroup(g, len);
-          total = daily.reduce((a, b) => a + b, 0);
+          total = len > 0 ? daily.reduce((a, b) => a + b, 0) : (g.totalSales || 0);
           productName = g.productName;
           imageUrl = g.imageUrl;
           if (nbi >= 0 && nbi < len) nextDaySales = daily[nbi];
@@ -3134,12 +3134,16 @@ ${productInfo}
       <div className="px-2 py-1.5">
         <div className="text-xs font-medium text-stone-700 truncate" title={title}>{title}</div>
         <div className="text-[11px] text-stone-500 mt-0.5">{sub}</div>
-        <div className="text-[11px] text-stone-500 mt-0.5">
-          전 {baselineDays}일 평균 {baselineAvg == null ? '—' : baselineAvg.toFixed(1)}/일 → 다음 영업일 {nextDaySales == null ? '—' : nextDaySales}
-        </div>
-        <div className={`text-[11px] mt-0.5 ${isBest ? 'text-stone-900 font-medium' : 'text-stone-500'}`}>
-          증분 {lift == null ? '—' : (lift > 0 ? '+' : '') + lift.toFixed(1)}{isBest ? ' ★' : ''}
-        </div>
+        {dateLabels.length > 0 && (
+          <>
+            <div className="text-[11px] text-stone-500 mt-0.5">
+              전 {baselineDays}일 평균 {baselineAvg == null ? '—' : baselineAvg.toFixed(1)}/일 → 다음 영업일 {nextDaySales == null ? '—' : nextDaySales}
+            </div>
+            <div className={`text-[11px] mt-0.5 ${isBest ? 'text-stone-900 font-medium' : 'text-stone-500'}`}>
+              증분 {lift == null ? '—' : (lift > 0 ? '+' : '') + lift.toFixed(1)}{isBest ? ' ★' : ''}
+            </div>
+          </>
+        )}
         {hasPerf && (
           <div className={`text-[11px] mt-0.5 ${isBestRoas ? 'text-amber-700 font-medium' : 'text-stone-500'}`}>
             <InfoTerm term="ROAS" /> {roas == null ? '—' : roas.toFixed(2)}{isBestRoas ? ' ★' : ''}
@@ -3157,7 +3161,7 @@ ${productInfo}
             광고-판매 추적 · {viewMode === 'product' ? '상품별' : '광고별'}
           </h2>
           <p className="text-xs text-stone-500 mt-1">
-            광고 {adListName} · 매출 {fileName}{hasPerf ? ` · 성과 ${campaignsName}` : ''} · 기간 {period} · 상품 {products.length}개 (매출매칭 {matchedCount}) · 캠페인 {campaignRows.length}개
+            광고 {adListName} · 매출 {fileName}{hasPerf ? ` · 성과 ${campaignsName}` : ''}{period ? ` · 기간 ${period}` : ' · 누적 CSV'} · 상품 {products.length}개 (매출매칭 {matchedCount}) · 캠페인 {campaignRows.length}개
           </p>
         </div>
         <button
@@ -3203,20 +3207,22 @@ ${productInfo}
             </button>
           )}
         </div>
-        <div className="flex items-center gap-1.5 border border-cream-400 px-2 py-1" title="광고 게시 전 일평균 판매를 몇 일치로 잡을지">
-          <span className="text-xs text-stone-500">증분 기준</span>
-          <span className="text-xs text-stone-400">전</span>
-          <input
-            type="number"
-            min="1"
-            max="60"
-            value={baselineDays}
-            onChange={e => setBaselineDays(Math.max(1, Math.min(60, parseInt(e.target.value) || 7)))}
-            className="w-12 px-1 py-0.5 text-sm bg-cream-50 border border-cream-400 text-center"
-          />
-          <span className="text-xs text-stone-500">일 평균</span>
-        </div>
-        {viewMode === 'product' && (
+        {dateLabels.length > 0 && (
+          <div className="flex items-center gap-1.5 border border-cream-400 px-2 py-1" title="광고 게시 전 일평균 판매를 몇 일치로 잡을지">
+            <span className="text-xs text-stone-500">증분 기준</span>
+            <span className="text-xs text-stone-400">전</span>
+            <input
+              type="number"
+              min="1"
+              max="60"
+              value={baselineDays}
+              onChange={e => setBaselineDays(Math.max(1, Math.min(60, parseInt(e.target.value) || 7)))}
+              className="w-12 px-1 py-0.5 text-sm bg-cream-50 border border-cream-400 text-center"
+            />
+            <span className="text-xs text-stone-500">일 평균</span>
+          </div>
+        )}
+        {viewMode === 'product' && dateLabels.length > 0 && (
           <div className="flex items-center border border-cream-400">
             <span className="px-2 text-xs text-stone-500">기간 단위</span>
             {[['day', '일별'], ['week', '주별']].map(([v, label]) => (
@@ -3233,9 +3239,11 @@ ${productInfo}
           </div>
         )}
         <span className="text-xs text-stone-500">
-          {viewMode === 'product'
-            ? '상품을 클릭하면 그 상품을 쓴 광고 이미지들과 기간별 판매가 펼쳐집니다.'
-            : '광고를 클릭하면 그 광고에 담긴 상품들이 펼쳐지고, 다음 영업일 판매가 가장 높은 상품이 강조됩니다.'}
+          {dateLabels.length === 0
+            ? '누적 매출 CSV 기준이라 일자별 증분(다음 영업일 lift)은 비활성화돼 있어요. 추천·교체 후보·광고 카드 표시는 동일합니다.'
+            : viewMode === 'product'
+              ? '상품을 클릭하면 그 상품을 쓴 광고 이미지들과 기간별 판매가 펼쳐집니다.'
+              : '광고를 클릭하면 그 광고에 담긴 상품들이 펼쳐지고, 다음 영업일 판매가 가장 높은 상품이 강조됩니다.'}
         </span>
       </div>
 
@@ -3533,7 +3541,7 @@ ${productInfo}
                                 ))}
                               </div>
                             </div>
-                            {p.matched ? (
+                            {p.matched && dateLabels.length > 0 ? (
                               <div className="overflow-x-auto">
                                 <div className="text-xs font-medium text-stone-600 mb-2">
                                   {periodMode === 'day' ? '일별' : '주별'} 판매량
@@ -3572,8 +3580,10 @@ ${productInfo}
                                   </tbody>
                                 </table>
                               </div>
-                            ) : (
+                            ) : !p.matched ? (
                               <div className="text-xs text-stone-500">매출 파일에 이 코드({p.code || '코드 없음'})의 상품이 없어 판매량을 표시할 수 없어요.</div>
+                            ) : (
+                              <div className="text-xs text-stone-500">누적 매출 CSV 기준 총 판매 {(p.total || 0).toLocaleString()}개. (일자별 판매량은 .xls 매출 파일이 있을 때만 표시됩니다.)</div>
                             )}
                           </div>
                         </td>
