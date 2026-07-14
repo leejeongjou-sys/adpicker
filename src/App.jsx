@@ -1069,7 +1069,7 @@ const pickItems = (groups, theme, opts) => {
     .filter(g => g.score > 0);
   scored.sort((a, b) => b.score - a.score);
 
-  const limit = 8;
+  const limit = theme === 'notMainExposed' ? 20 : 8;
   const isSingleCategory = (theme === 'category' && opts.categories?.length === 1) || theme === 'package';
   const useDiversity = opts.useDiversity && !isSingleCategory;
 
