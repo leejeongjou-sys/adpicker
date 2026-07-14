@@ -3,7 +3,8 @@ import {
   LucideUpload, LucideFileSpreadsheet, LucideDownload, LucideSparkles,
   LucideTrendingUp, LucideTrendingDown, LucideStar, LucideCalendar, LucideShirt, LucideTag,
   LucidePackage, LucideAlertCircle, LucideX, LucideImage, LucideBox, LucideArchive, LucideAward,
-  LucideMessageSquare, LucideKey, LucideLoader2, LucideCalendarCheck, LucideSearch
+  LucideMessageSquare, LucideKey, LucideLoader2, LucideCalendarCheck, LucideSearch,
+  LucideEyeOff, LucideRefreshCw
 } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
@@ -19,6 +20,7 @@ const THEMES = [
   { id: 'rising', label: '급상승(라이징)', desc: '초반 10% vs 후반 10% 증가율', icon: LucideTrendingUp, modes: ['xls'] },
   { id: 'overstock', label: '재고 과다', desc: '재고 많고 안 팔리는 상품 (재고 소진용)', icon: LucideArchive, modes: ['xls'] },
   { id: 'declining', label: '판매 감소', desc: '후반에 판매가 떨어진 상품 (재활성용)', icon: LucideTrendingDown, modes: ['xls'] },
+  { id: 'notMainExposed', label: '메인 미노출 후보', desc: '잘 팔리는데 사이트 메인에 없는 상품', icon: LucideEyeOff, modes: ['xls', 'csv'] },
   { id: 'package', label: '패키지 베스트', desc: '상품명에 PACK 포함된 상품 Top 8', icon: LucideBox, modes: ['csv'] },
   { id: 'custom', label: '직접 입력', desc: '자연어 조건으로 직접 추출', icon: LucideMessageSquare, modes: ['xls', 'csv'] },
 ];
@@ -463,6 +465,7 @@ const parseProductCsv = (text) => {
       season: extractSeason(purchaseName),
       memo1: get(colMap.memo1),
       brand: extractBrand(productName),
+      productCode: extractProductCode(productName),
       isPackage: isPackage(productName),
       registDate: get(colMap.registDate),
       price: parsePrice(get(colMap.price)),
@@ -730,6 +733,7 @@ const groupByProduct = (skus) => {
         season: s.season,
         memo1: s.memo1,
         brand: extractBrand(s.productName),
+        productCode: extractProductCode(s.productName),
         isPackage: isPackage(s.productName),
         registDate: s.registDate,
         price: s.price,
@@ -792,6 +796,7 @@ const computeScore = (theme, opts, group) => {
     case 'category':
     case 'brand':
     case 'package':
+    case 'notMainExposed':
       return group.totalSales;
     case 'rising':
       if (group.totalSales < (opts.minSales ?? 2)) return -1;
@@ -844,6 +849,10 @@ const filterByTheme = (theme, opts, groups) => {
   }
   if (theme === 'package') {
     list = list.filter(g => g.category === '패키지');
+  }
+  if (theme === 'notMainExposed' && opts._mainCodes) {
+    const codes = opts._mainCodes;
+    list = list.filter(g => g.productCode && !codes.has(g.productCode));
   }
   if (opts.seasonFilters?.length > 0) {
     list = list.filter(g => opts.seasonFilters.includes(g.season));
@@ -1116,6 +1125,8 @@ const buildBriefing = (theme, opts, mode, picks) => {
       return `${opts.brand} 라인 중 ${periodText} 판매량 상위 ${n}개입니다.${seasonText} 브랜드 톤이 통일되어 시리즈·컬렉션 광고나 브랜드 인지도 캠페인에 잘 어울립니다. 한 라인을 단일 광고 슬롯으로 묶어 운영하기 좋아요.`;
     case 'package':
       return `상품명에 PACK이 포함된 패키지 상품 중 판매 상위 ${n}개입니다.${seasonText} 객단가가 높아 매출 효율이 좋고, "묶음 할인"·"세트 구성" 같은 가성비 메시지와 잘 맞습니다. 신규 고객 객단가 끌어올리는 용도로도 효과적입니다.`;
+    case 'notMainExposed':
+      return `${periodText} 판매는 잘 나오는데 fairplay142.com 메인 페이지 어디에도 노출되지 않은 ${n}개 상품입니다.${seasonText} 놓치고 있는 매출 기회로, 메인 진열 슬롯을 확보하거나 광고로 직접 트래픽을 태워 잠재력을 실현할 후보입니다. 상품명의 8자리 코드를 사이트 메인 코드와 대조해 골라낸 결과입니다.`;
     case 'steady':
       return `등록 ${opts.minMonths}개월 이상이면서 일평균 ${opts.minAvgDaily}개 이상 꾸준히 팔리는 스테디셀러 ${n}개입니다.${seasonText} 검증된 효자 상품이라 광고 안정성이 가장 높고, 시즌 비수기의 매출 백본으로 적합합니다. 대규모 예산을 안전하게 태울 수 있습니다.`;
     case 'overstock':
@@ -1372,7 +1383,33 @@ const App = () => {
   const [customSpec, setCustomSpec] = useState(null);
   const [customLoading, setCustomLoading] = useState(false);
   const [customError, setCustomError] = useState(null);
+  const [mainCodes, setMainCodes] = useState(null);
+  const [mainCodesLoading, setMainCodesLoading] = useState(false);
+  const [mainCodesError, setMainCodesError] = useState(null);
+  const [mainCodesFetchedAt, setMainCodesFetchedAt] = useState(null);
   const fileInputRef = useRef(null);
+
+  const fetchMainCodes = useCallback(async () => {
+    setMainCodesLoading(true);
+    setMainCodesError(null);
+    try {
+      const res = await fetch('/api/main-products');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `사이트 확인 실패 (${res.status})`);
+      setMainCodes(new Set(data.codes || []));
+      setMainCodesFetchedAt(data.fetchedAt || new Date().toISOString());
+    } catch (e) {
+      setMainCodesError(e.message);
+    } finally {
+      setMainCodesLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (theme === 'notMainExposed' && !mainCodes && !mainCodesLoading && !mainCodesError) {
+      fetchMainCodes();
+    }
+  }, [theme, mainCodes, mainCodesLoading, mainCodesError, fetchMainCodes]);
 
   const categories = useMemo(() => {
     const EXCLUDED = new Set(['기타', '패키지', '미분류']);
@@ -1490,8 +1527,8 @@ const App = () => {
     const exSet = new Set(excluded);
     const filteredGroups = exSet.size > 0 ? groups.filter(g => !exSet.has(g.productName)) : groups;
     const filteredCustom = exSet.size > 0 ? customResults.filter(g => !exSet.has(g.productName)) : customResults;
-    return pickItems(filteredGroups, theme, { ...opts, _customResults: filteredCustom, _mode: mode });
-  }, [groups, theme, opts, customResults, mode, excluded]);
+    return pickItems(filteredGroups, theme, { ...opts, _customResults: filteredCustom, _mode: mode, _mainCodes: mainCodes });
+  }, [groups, theme, opts, customResults, mode, excluded, mainCodes]);
 
   const handleExclude = useCallback((name) => {
     setExcluded(prev => prev.includes(name) ? prev : [...prev, name]);
@@ -1542,7 +1579,7 @@ const App = () => {
     setExporting('single');
     setExportProgress(null);
     try {
-      await exportSingleTheme(preview, theme, { ...opts, _mode: mode }, embedImages, (p) => setExportProgress(p));
+      await exportSingleTheme(preview, theme, { ...opts, _mode: mode, _mainCodes: mainCodes }, embedImages, (p) => setExportProgress(p));
     } catch (e) {
       setError(`엑셀 저장 실패: ${e.message}`);
     } finally {
@@ -1557,7 +1594,7 @@ const App = () => {
     setExporting('all');
     setExportProgress(null);
     try {
-      await exportAllThemes(groups, mode, { ...opts, _mode: mode }, embedImages, brands, categories, selectedIds, (p) => setExportProgress(p));
+      await exportAllThemes(groups, mode, { ...opts, _mode: mode, _mainCodes: mainCodes }, embedImages, brands, categories, selectedIds, (p) => setExportProgress(p));
     } catch (e) {
       setError(`다운 실패: ${e.message}`);
     } finally {
@@ -1773,6 +1810,11 @@ const App = () => {
                   customSpec={customSpec}
                   customResultsCount={customResults.length}
                   onRunCustom={handleRunCustom}
+                  mainCodes={mainCodes}
+                  mainCodesLoading={mainCodesLoading}
+                  mainCodesError={mainCodesError}
+                  mainCodesFetchedAt={mainCodesFetchedAt}
+                  onRefreshMainCodes={fetchMainCodes}
                 />
               </Panel>
 
@@ -3903,8 +3945,50 @@ const ThemeOptions = ({
   theme, opts, setOpts, categories, brands,
   customQuery, setCustomQuery, apiKey, saveApiKey,
   customLoading, customError, customSpec, customResultsCount, onRunCustom,
+  mainCodes, mainCodesLoading, mainCodesError, mainCodesFetchedAt, onRefreshMainCodes,
 }) => {
   const set = (k, v) => setOpts({ ...opts, [k]: v });
+
+  if (theme === 'notMainExposed') {
+    const fetched = mainCodesFetchedAt ? new Date(mainCodesFetchedAt).toLocaleTimeString('ko-KR') : null;
+    return (
+      <div className="space-y-3 text-sm">
+        <p className="text-xs text-stone-600 leading-relaxed">
+          fairplay142.com 메인 페이지에서 상품 8자리 코드를 뽑아 매출 파일과 대조합니다. 매출은 있는데 사이트 메인에 안 걸린 상품 순으로 정렬돼요.
+        </p>
+        {mainCodesLoading ? (
+          <div className="flex items-center gap-2 text-xs text-stone-600">
+            <LucideLoader2 size={14} className="animate-spin" />
+            사이트 메인에서 상품 코드 가져오는 중...
+          </div>
+        ) : mainCodesError ? (
+          <div className="text-xs text-rose-700 leading-snug">
+            {mainCodesError}
+            <button
+              onClick={onRefreshMainCodes}
+              className="ml-2 underline underline-offset-2 text-stone-700"
+            >
+              다시 시도
+            </button>
+          </div>
+        ) : mainCodes ? (
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs text-stone-600">
+              메인 상품 <span className="font-medium text-stone-900">{mainCodes.size}</span>개 확인 됨
+              {fetched && <span className="text-stone-500"> · {fetched}</span>}
+            </div>
+            <button
+              onClick={onRefreshMainCodes}
+              className="text-xs text-stone-700 hover:text-stone-900 flex items-center gap-1 underline underline-offset-2"
+              title="사이트 다시 확인"
+            >
+              <LucideRefreshCw size={11} /> 갱신
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   if (theme === 'custom') {
     return (
