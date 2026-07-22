@@ -891,8 +891,8 @@ const applyDiversity = (sorted, maxPerCategory, limit) => {
 };
 
 const RECOMMEND_PLAN = [
-  { theme: 'bestseller', n: 4 },
-  { theme: 'newProduct', n: 2 },
+  { theme: 'bestseller', n: 5 },
+  { theme: 'newProduct', n: 3 },
   { theme: 'rising', n: 2 },
 ];
 
@@ -925,13 +925,13 @@ const pickRecommendation = (groups, opts) => {
     }
   }
 
-  if (picks.length < 8) {
+  if (picks.length < 10) {
     const more = seasonFiltered
       .map(g => ({ ...g, score: g.totalSales, pickReason: 'bestseller' }))
       .filter(g => g.score > 0 && !used.has(g.productName));
     more.sort((a, b) => b.score - a.score);
     for (const g of more) {
-      if (picks.length >= 8) break;
+      if (picks.length >= 10) break;
       picks.push(g);
       used.add(g.productName);
     }
@@ -946,16 +946,16 @@ const pickRecommendation = (groups, opts) => {
         result.push(p);
         counts.set(p.category, c + 1);
       }
-      if (result.length >= 8) break;
+      if (result.length >= 10) break;
     }
     for (const p of picks) {
-      if (result.length >= 8) break;
+      if (result.length >= 10) break;
       if (!result.includes(p)) result.push(p);
     }
     return result;
   }
 
-  return picks.slice(0, 8);
+  return picks.slice(0, 10);
 };
 
 const buildCustomPrompt = (userQuery, mode) => `당신은 광고 후보 상품 선정을 돕는 데이터 어시스턴트입니다.
@@ -1069,7 +1069,7 @@ const pickItems = (groups, theme, opts) => {
     .filter(g => g.score > 0);
   scored.sort((a, b) => b.score - a.score);
 
-  const limit = theme === 'notMainExposed' ? 20 : 8;
+  const limit = theme === 'notMainExposed' ? 20 : 10;
   const isSingleCategory = (theme === 'category' && opts.categories?.length === 1) || theme === 'package';
   const useDiversity = opts.useDiversity && !isSingleCategory;
 
