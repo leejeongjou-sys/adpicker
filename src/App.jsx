@@ -428,6 +428,81 @@ const parseAdListXlsx = async (zip) => {
   return campaigns;
 };
 
+const parseWeeklyCsv = (text) => {
+  const lines = text.split(/\r?\n/).filter(l => l.length > 0);
+  if (lines.length < 2) throw new Error('데이터 행이 없습니다.');
+  const headers = parseCsvLine(lines[0]);
+  const idx = (name) => headers.findIndex(h => h.trim() === name);
+
+  const colMap = {
+    productCode: idx('상품코드'),
+    productName: idx('상품명'),
+    purchaseName: idx('사입상품명'),
+    supplier: idx('공급처명'),
+    currentStock: idx('현재재고'),
+    cost: idx('원가'),
+    price: idx('평균판매가'),
+    quantity: idx('판매수량'),
+    revenue: idx('판매금액'),
+    registDate: idx('등록일자'),
+    category: idx('상품분류명'),
+    memo1: idx('메모1'),
+    canceled: idx('취소수량'),
+    thisWeek: idx('이번주'),
+    week1: idx('1주차'),
+    week2: idx('2주차'),
+    week3: idx('3주차'),
+    week4: idx('4주차'),
+  };
+  if (colMap.productName < 0) throw new Error('상품명 컬럼을 찾지 못했습니다.');
+
+  const groups = [];
+  for (let r = 1; r < lines.length; r++) {
+    const cells = parseCsvLine(lines[r]);
+    const get = (i) => i >= 0 && cells[i] != null ? cells[i].trim() : '';
+    const productName = get(colMap.productName);
+    if (!productName) continue;
+    const purchaseName = cleanCellText(get(colMap.purchaseName));
+    const totalSales = parseInt0(get(colMap.quantity));
+    const canceled = parseInt0(get(colMap.canceled));
+    const thisWeek = parseInt0(get(colMap.thisWeek));
+    const w1 = parseInt0(get(colMap.week1));
+    const w2 = parseInt0(get(colMap.week2));
+    const w3 = parseInt0(get(colMap.week3));
+    const w4 = parseInt0(get(colMap.week4));
+    const earlySales = w3 + w4;
+    const lateSales = thisWeek + w1;
+    const fiveWeekSum = thisWeek + w1 + w2 + w3 + w4;
+    const avgDaily = fiveWeekSum / 35;
+    const productCode = cleanCellText(get(colMap.productCode)) || extractProductCode(productName);
+    groups.push({
+      productName,
+      productCode,
+      category: resolveCategory(productName, get(colMap.category)),
+      season: extractSeason(purchaseName),
+      memo1: get(colMap.memo1),
+      brand: extractBrand(productName),
+      isPackage: isPackage(productName),
+      registDate: get(colMap.registDate),
+      price: parsePrice(get(colMap.price)),
+      imageUrl: null,
+      skus: [],
+      totalSales,
+      totalRevenue: parsePrice(get(colMap.revenue)),
+      totalCanceled: canceled,
+      totalCurrentStock: parseInt0(get(colMap.currentStock)),
+      earlySales,
+      lateSales,
+      growthRate: earlySales > 0 ? lateSales / earlySales : (lateSales > 0 ? 99 : 0),
+      cancelRate: totalSales > 0 ? canceled / totalSales : 0,
+      bestSku: null,
+      bestSku2: null,
+      avgDaily,
+    });
+  }
+  return enrichPackageSeasons(groups);
+};
+
 const parseProductCsv = (text) => {
   const lines = text.split(/\r?\n/).filter(l => l.length > 0);
   if (lines.length < 2) throw new Error('데이터 행이 없습니다.');
@@ -891,9 +966,9 @@ const applyDiversity = (sorted, maxPerCategory, limit) => {
 };
 
 const RECOMMEND_PLAN = [
-  { theme: 'bestseller', n: 6 },
-  { theme: 'newProduct', n: 4 },
-  { theme: 'rising', n: 2 },
+  { theme: 'bestseller', n: 10 },
+  { theme: 'newProduct', n: 6 },
+  { theme: 'rising', n: 4 },
 ];
 
 const pickRecommendation = (groups, opts) => {
@@ -925,13 +1000,13 @@ const pickRecommendation = (groups, opts) => {
     }
   }
 
-  if (picks.length < 12) {
+  if (picks.length < 20) {
     const more = seasonFiltered
       .map(g => ({ ...g, score: g.totalSales, pickReason: 'bestseller' }))
       .filter(g => g.score > 0 && !used.has(g.productName));
     more.sort((a, b) => b.score - a.score);
     for (const g of more) {
-      if (picks.length >= 12) break;
+      if (picks.length >= 20) break;
       picks.push(g);
       used.add(g.productName);
     }
@@ -946,16 +1021,16 @@ const pickRecommendation = (groups, opts) => {
         result.push(p);
         counts.set(p.category, c + 1);
       }
-      if (result.length >= 12) break;
+      if (result.length >= 20) break;
     }
     for (const p of picks) {
-      if (result.length >= 12) break;
+      if (result.length >= 20) break;
       if (!result.includes(p)) result.push(p);
     }
     return result;
   }
 
-  return picks.slice(0, 12);
+  return picks.slice(0, 20);
 };
 
 const buildCustomPrompt = (userQuery, mode) => `당신은 광고 후보 상품 선정을 돕는 데이터 어시스턴트입니다.
@@ -1069,7 +1144,7 @@ const pickItems = (groups, theme, opts) => {
     .filter(g => g.score > 0);
   scored.sort((a, b) => b.score - a.score);
 
-  const limit = theme === 'notMainExposed' ? 20 : 12;
+  const limit = 20;
   const isSingleCategory = (theme === 'category' && opts.categories?.length === 1) || theme === 'package';
   const useDiversity = opts.useDiversity && !isSingleCategory;
 
@@ -1473,7 +1548,12 @@ const App = () => {
           nextDateLabels = parsed.dateLabels;
           nextFileName = file.name;
         } else {
-          nextGroups = parseProductCsv(text);
+          const headerLine = text.split(/\r?\n/)[0] || '';
+          if (headerLine.includes('이번주') || headerLine.includes('1주차')) {
+            nextGroups = parseWeeklyCsv(text);
+          } else {
+            nextGroups = parseProductCsv(text);
+          }
           nextSkus = [];
           nextDateLabels = [];
           nextFileName = file.name;
