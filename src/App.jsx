@@ -428,6 +428,57 @@ const parseAdListXlsx = async (zip) => {
   return campaigns;
 };
 
+const xlsxToRows = async (buf) => {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.worksheets[0];
+  if (!ws) throw new Error('xlsx에 시트가 없습니다.');
+  const rows = [];
+  ws.eachRow((row) => {
+    const cells = (row.values || []).slice(1).map(v => {
+      if (v == null) return '';
+      if (typeof v === 'object') {
+        if (v.result != null) return String(v.result);
+        if (v.text != null) return String(v.text);
+        if (v.richText) return v.richText.map(t => t.text).join('');
+        if (v.hyperlink) return String(v.hyperlink);
+        return '';
+      }
+      return String(v);
+    });
+    rows.push(cells);
+  });
+  return rows;
+};
+
+const rowsToCsvText = (rows) => rows.map(cells =>
+  cells.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')
+).join('\n');
+
+const parseSalesXlsx = async (buf) => {
+  const rows = await xlsxToRows(buf);
+  if (rows.length < 2) throw new Error('xlsx에 데이터 행이 없습니다.');
+  const header = rows[0].join(',');
+  const csvText = rowsToCsvText(rows);
+
+  if (header.includes('이번주') || header.includes('1주차')) {
+    return { kind: 'csv', groups: parseWeeklyCsv(csvText), isSalesCsvOnly: true };
+  }
+  if (header.includes('일평균수량')) {
+    return { kind: 'csv', groups: parseProductCsv(csvText), isSalesCsvOnly: true };
+  }
+  if (header.includes('옵션명') && (header.includes('판매합계수량') || header.includes('현재재고'))) {
+    throw new Error(
+      'SKU 옵션 단위 원본(.xls)을 엑셀에서 다시 저장한 .xlsx는 파싱이 어려워요. ' +
+      '세모난 어드민에서 받은 원본 .xls 파일 그대로 올려주세요 (열지 말고).'
+    );
+  }
+  throw new Error(
+    'xlsx의 컬럼 형식을 알 수 없어요. ' +
+    '헤더 예: ' + rows[0].slice(0, 6).join(' / ')
+  );
+};
+
 const parseWeeklyCsv = (text) => {
   const lines = text.split(/\r?\n/).filter(l => l.length > 0);
   if (lines.length < 2) throw new Error('데이터 행이 없습니다.');
@@ -1524,16 +1575,36 @@ const App = () => {
           if (await isAdListXlsx(zip)) {
             nextAdList = await parseAdListXlsx(zip);
             nextAdListName = file.name;
-          } else {
-            nextCampaigns = await parseAdPerformance(buf);
-            nextCampaignsName = file.name;
+            continue;
+          }
+          try {
+            const salesResult = await parseSalesXlsx(buf);
+            nextGroups = salesResult.groups;
+            nextSkus = [];
+            nextDateLabels = [];
+            nextFileName = file.name;
+            isSalesCsvOnly = true;
+          } catch (salesErr) {
+            try {
+              nextCampaigns = await parseAdPerformance(buf);
+              nextCampaignsName = file.name;
+            } catch (adErr) {
+              throw new Error(
+                `xlsx 파싱 실패: ${salesErr.message}\n` +
+                `광고 성과 파일로도 인식 안 됨: ${adErr.message}`
+              );
+            }
           }
           continue;
         }
-        const decoder = new TextDecoder('euc-kr');
-        let text = decoder.decode(buf);
-        if (!text.includes('상품명') && !text.includes('<table')) {
-          text = new TextDecoder('utf-8').decode(buf);
+        const eucText = new TextDecoder('euc-kr').decode(buf);
+        const utf8Text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+        const looksKorean = (s) => /[가-힣]/.test(s);
+        const eucKoreanCount = (eucText.match(/[가-힣]/g) || []).length;
+        const utf8KoreanCount = (utf8Text.match(/[가-힣]/g) || []).length;
+        let text = eucKoreanCount >= utf8KoreanCount ? eucText : utf8Text;
+        if (!looksKorean(text) && !text.includes('<table')) {
+          text = utf8Text;
         }
         if (isAdListCsv(text)) {
           nextAdList = parseAdList(text);
@@ -1594,7 +1665,14 @@ const App = () => {
       }
       // adList만 있고 매출 없으면 mode 그대로 (UploadArea 유지)
     } catch (e) {
-      setError(`파일 파싱 실패: ${e.message}`);
+      setError(
+        `파일 파싱 실패: ${e.message}\n\n` +
+        `지원 형식:\n` +
+        `• 세모난 어드민 원본 .xls (SKU 옵션 단위·이미지 포함)\n` +
+        `• stk_prdSalesInfo .csv/.xlsx (상품 단위·주차별)\n` +
+        `• sts_prdListStatistics .csv/.xlsx (상품 단위·누적)\n\n` +
+        `.xls 파일을 엑셀에서 열어서 저장하면 형식이 깨져요. 원본 그대로 올려주세요.`
+      );
     } finally {
       setParsing(false);
     }
@@ -1781,7 +1859,7 @@ const App = () => {
         {error && (
           <div className="mb-4 bg-rose-50 border border-rose-300 text-rose-900 px-4 py-3 flex items-start gap-2">
             <LucideAlertCircle size={18} className="mt-0.5 shrink-0" />
-            <span className="flex-1 text-sm">{error}</span>
+            <span className="flex-1 text-sm whitespace-pre-line">{error}</span>
             <button onClick={() => setError(null)}><LucideX size={16} /></button>
           </div>
         )}
